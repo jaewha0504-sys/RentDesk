@@ -318,8 +318,15 @@ function openBuildingEditor(b) {
     `<div class="field"><label>건물명 *</label><input id="e-name" value="${esc(d.name)}" placeholder="예: 강남 본사빌딩"></div>
      <div class="field"><label>주소</label><input id="e-addr" value="${esc(d.address || "")}" placeholder="예: 서울시 강남구"></div>
      <div class="field"><label>메모</label><input id="e-memo" value="${esc(d.memo || "")}"></div>`,
-    `<button id="c">취소</button><button id="s" class="accent">저장</button>`);
+    `${isNew ? "" : '<button id="del" class="danger">건물 삭제</button>'}<span style="flex:1"></span><button id="c">취소</button><button id="s" class="accent">저장</button>`);
   ov.querySelector("#c").onclick = () => ov.remove();
+  if (!isNew) ov.querySelector("#del").onclick = () => {
+    if (confirm(`「${b.name}」 건물과 호실 ${b.units.length}개를 모두 삭제할까요?\n복구할 수 없습니다.`)) {
+      data.buildings = data.buildings.filter((x) => x.id !== b.id);
+      if (selBuildingId === b.id) { selBuildingId = data.buildings[0]?.id || null; selUnitId = building()?.units[0]?.id || null; }
+      save(); ov.remove(); renderAll();
+    }
+  };
   ov.querySelector("#s").onclick = () => {
     const name = ov.querySelector("#e-name").value.trim(); if (!name) return alert("건물명을 입력하세요.");
     const obj = { name, address: ov.querySelector("#e-addr").value.trim(), memo: ov.querySelector("#e-memo").value.trim() };
