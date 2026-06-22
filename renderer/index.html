@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>RentDesk</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header id="topbar">
+  <div class="brand">🏢 RentDesk</div>
+  <div class="actions">
+    <button id="btnTax">세금계산서 발행 현황</button>
+    <button id="btnArchive">퇴실 임차인 보관함</button>
+    <button id="btnCsv">CSV 내보내기</button>
+  </div>
+</header>
+<main id="layout">
+  <section id="sidebar">
+    <h2>건물 목록 <span class="muted" style="font-weight:400">· 드래그로 순서 변경</span></h2>
+    <ul id="buildingList"></ul>
+    <div id="taxReminder"></div>
+    <div class="sidefoot"><button id="btnAddBuilding" class="accent">+ 건물 추가</button></div>
+  </section>
+  <section id="unitcol">
+    <h2 id="unitTitle">호실 목록</h2>
+    <div id="unitSummary" class="muted"></div>
+    <ul id="unitList"></ul>
+    <div class="colfoot">
+      <button id="btnAddUnit" class="accent">+ 호실</button>
+      <span style="flex:1"></span>
+      <button id="btnMoveOut">퇴실 처리</button>
+      <button id="btnDelUnit" class="danger">삭제</button>
+    </div>
+  </section>
+  <section id="detail"><div id="detailBody"></div></section>
+</main>
+<div id="modalRoot"></div>
+<script src="app.js"></script>
+</body>
+</html>
