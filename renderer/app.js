@@ -513,4 +513,26 @@ document.getElementById("btnTax").onclick = openTaxMonth;
 document.getElementById("btnArchive").onclick = openArchive;
 document.getElementById("btnCsv").onclick = exportCSV;
 
+// ===== 창 크기 드래그 조절 =====
+function setupResizers() {
+  const colDrag = (sep, target, min, max) => {
+    sep.addEventListener("mousedown", (e) => {
+      e.preventDefault(); const sx = e.clientX, sw = target.offsetWidth; document.body.style.cursor = "col-resize";
+      const mv = (ev) => { let w = Math.max(min, Math.min(max, sw + (ev.clientX - sx))); target.style.width = w + "px"; };
+      const up = () => { document.body.style.cursor = ""; document.removeEventListener("mousemove", mv); document.removeEventListener("mouseup", up); };
+      document.addEventListener("mousemove", mv); document.addEventListener("mouseup", up);
+    });
+  };
+  colDrag(document.getElementById("sep1"), document.getElementById("sidebar"), 190, 460);
+  colDrag(document.getElementById("sep2"), document.getElementById("unitcol"), 240, 640);
+  const tax = document.getElementById("taxReminder");
+  document.getElementById("taxsep").addEventListener("mousedown", (e) => {
+    e.preventDefault(); const sy = e.clientY, sh = tax.offsetHeight; document.body.style.cursor = "row-resize";
+    const mv = (ev) => { let h = Math.max(54, Math.min(window.innerHeight - 200, sh - (ev.clientY - sy))); tax.style.height = h + "px"; tax.style.maxHeight = "none"; };
+    const up = () => { document.body.style.cursor = ""; document.removeEventListener("mousemove", mv); document.removeEventListener("mouseup", up); };
+    document.addEventListener("mousemove", mv); document.addEventListener("mouseup", up);
+  });
+}
+setupResizers();
+
 load().then(renderAll);
