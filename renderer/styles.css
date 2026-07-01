@@ -82,6 +82,8 @@ table.ledger input{width:100%;border:1px solid var(--border);border-radius:6px;p
 table.ledger input.num{text-align:right;}
 td.num{text-align:right;font-variant-numeric:tabular-nums;}
 td.red{color:var(--red);}
+td.green{color:var(--green);}
+tr.opening td{background:rgba(217,119,87,.06);}
 
 /* 모달 */
 .overlay{position:fixed;inset:0;background:rgba(20,20,25,.45);display:flex;align-items:flex-start;justify-content:center;padding:40px 16px;overflow:auto;z-index:50;}

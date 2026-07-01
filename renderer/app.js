@@ -185,24 +185,43 @@ function renderDetail() {
   document.getElementById("btnEditUnit").onclick = () => openUnitEditor(u);
   document.getElementById("btnBiz").onclick = () => attachAction(u, "biz", "businessCert", "사업자등록증");
   document.getElementById("btnContract").onclick = () => attachAction(u, "contract", "contract", "계약서");
+  // 행 밖 클릭 시 선택 해제
+  host.onclick = (e) => {
+    if (e.target.closest("tbody tr[data-id]") || e.target.closest("button, input, select")) return;
+    if (selPayments.size) { selPayments.clear(); anchorPayment = null; renderDetail(); }
+  };
+}
+
+function unpaidParts(v) {
+  return { txt: v > 0 ? "-" + won(v) : (v < 0 ? "+" + won(-v) : "—"), cls: v > 0 ? "red" : (v < 0 ? "green" : "") };
 }
 
 function ledgerHTML(u) {
   let cum = 0;
   const rows = (u.payments || []).map((p) => {
     const tu = (p.due || 0) - (p.paid || 0); cum += tu;
-    const selc = selPayments.has(p.id) ? " class=\"sel\"" : "";
-    return `<tr data-id="${p.id}"${selc}>
+    const tp = unpaidParts(tu), cp = unpaidParts(cum);
+    const cls = (selPayments.has(p.id) ? "sel " : "") + (p.isOpening ? "opening" : "");
+    if (p.isOpening) {
+      return `<tr data-id="${p.id}" class="${cls}">
+        <td style="color:var(--accent)">과거 누적</td>
+        <td colspan="3"></td>
+        <td class="num c-this ${tp.cls}">${tp.txt}</td>
+        <td class="num c-cum ${cp.cls}">${cp.txt}</td>
+        <td><div style="display:flex;align-items:center;gap:6px;justify-content:center"><span class="muted">과거 미납액</span><input class="num d-open" inputmode="numeric" style="width:110px" value="${p.due ? won(p.due) : ""}"></div></td>
+      </tr>`;
+    }
+    return `<tr data-id="${p.id}" class="${cls}">
       <td>${esc(p.period)}</td>
-      <td><input class="num d-due" inputmode="numeric" value="${won(p.due)}"></td>
+      <td><input class="num d-due" inputmode="numeric" value="${p.due ? won(p.due) : ""}"></td>
       <td><input class="num d-paid" inputmode="numeric" value="${p.paid ? won(p.paid) : ""}"></td>
       <td><input type="date" class="d-date" value="${ymdOf(p.paidDate)}"></td>
-      <td class="num ${tu > 0 ? "red" : ""}">${tu !== 0 ? won(tu) : "—"}</td>
-      <td class="num ${cum > 0 ? "red" : ""}">${cum !== 0 ? won(cum) : "—"}</td>
+      <td class="num c-this ${tp.cls}">${tp.txt}</td>
+      <td class="num c-cum ${cp.cls}">${cp.txt}</td>
       <td><input class="d-memo" value="${esc(p.memo || "")}"></td>
     </tr>`;
   }).join("");
-  return `<div class="ledger-head"><h2>월별 입금내역</h2><span class="muted">셀을 클릭해 바로 수정 · Cmd/Shift로 복수선택</span><span class="sp"></span>
+  return `<div class="ledger-head"><h2>월별 입금내역</h2><span class="muted">셀을 클릭해 바로 수정 · Ctrl/Shift로 복수선택</span><span class="sp"></span>
       <button id="btnFill">빠진 달 채우기</button>
       <button id="btnDelPay" class="danger">행 삭제</button>
       <button id="btnAddPay" class="accent">+ 입금내역 추가</button></div>
@@ -211,24 +230,41 @@ function ledgerHTML(u) {
     </tr></thead><tbody>${rows}</tbody></table>`;
 }
 
+// 표 전체를 다시 그리지 않고 미납 계산값만 갱신 (입력칸 유지 → 클릭/편집 안정)
+function refreshComputed(u) {
+  let cum = 0;
+  document.querySelectorAll("#detailBody tbody tr[data-id]").forEach((tr) => {
+    const p = u.payments.find((x) => x.id === tr.dataset.id); if (!p) return;
+    const tu = (p.due || 0) - (p.paid || 0); cum += tu;
+    const tp = unpaidParts(tu), cp = unpaidParts(cum);
+    const c1 = tr.querySelector(".c-this"), c2 = tr.querySelector(".c-cum");
+    if (c1) { c1.textContent = tp.txt; c1.className = "num c-this " + tp.cls; }
+    if (c2) { c2.textContent = cp.txt; c2.className = "num c-cum " + cp.cls; }
+  });
+  renderBuildings(); renderUnits();
+}
+
 function wireLedger(u) {
-  document.getElementById("btnAddPay").onclick = () => {
-    const pays = u.payments; const period = pays.length ? nextMonth(pays[pays.length - 1].period) : nowMonthKey();
-    pays.push({ id: uid(), period, due: expectedVAT(u, period), paid: 0, paidDate: null, memo: "" });
-    save(); renderAll();
-  };
-  document.getElementById("btnFill").onclick = () => { fillMissing(u); save(); renderAll(); };
+  document.getElementById("btnAddPay").onclick = () => { addPaymentSmart(u); save(); renderDetail(); };
+  document.getElementById("btnFill").onclick = () => { fillMissing(u); save(); renderDetail(); };
   document.getElementById("btnDelPay").onclick = () => {
     if (!selPayments.size) return alert("삭제할 행을 선택하세요.");
-    u.payments = u.payments.filter((p) => !selPayments.has(p.id)); selPayments.clear(); save(); renderAll();
+    u.payments = u.payments.filter((p) => !selPayments.has(p.id)); selPayments.clear(); save(); renderDetail();
   };
-  document.querySelectorAll("#detailBody tbody tr").forEach((tr) => {
-    const id = tr.dataset.id; const p = u.payments.find((x) => x.id === id);
-    tr.querySelector(".d-due").onchange = (e) => { p.due = parseNum(e.target.value); save(); renderDetail(); };
-    const paidInput = tr.querySelector(".d-paid");
-    paidInput.onchange = (e) => { p.paid = parseNum(e.target.value); if (p.paid > 0 && !p.paidDate) p.paidDate = isoOf(todayYmd()); save(); renderDetail(); };
-    tr.querySelector(".d-date").onchange = (e) => { p.paidDate = e.target.value ? isoOf(e.target.value) : null; save(); };
-    tr.querySelector(".d-memo").onchange = (e) => { p.memo = e.target.value; save(); };
+  document.querySelectorAll("#detailBody tbody tr[data-id]").forEach((tr) => {
+    const id = tr.dataset.id; const p = u.payments.find((x) => x.id === id); if (!p) return;
+    const dueIn = tr.querySelector(".d-due"), openIn = tr.querySelector(".d-open"), paidIn = tr.querySelector(".d-paid");
+    if (dueIn) { bindMoney(dueIn); dueIn.onchange = () => { p.due = parseNum(dueIn.value); refreshComputed(u); save(); }; }
+    if (openIn) { bindMoney(openIn); openIn.onchange = () => { p.due = parseNum(openIn.value); refreshComputed(u); save(); }; }
+    if (paidIn) { bindMoney(paidIn); paidIn.onchange = () => {
+        p.paid = parseNum(paidIn.value);
+        if (p.paid > 0 && !p.paidDate) { p.paidDate = isoOf(todayYmd()); const di = tr.querySelector(".d-date"); if (di) di.value = ymdOf(p.paidDate); }
+        refreshComputed(u); save();
+      }; }
+    const dateIn = tr.querySelector(".d-date");
+    if (dateIn) dateIn.onchange = () => { p.paidDate = dateIn.value ? isoOf(dateIn.value) : null; save(); };
+    const memoIn = tr.querySelector(".d-memo");
+    if (memoIn) memoIn.onchange = () => { p.memo = memoIn.value; save(); };
     tr.onclick = (e) => {
       if (e.target.tagName === "INPUT") return;
       if (e.shiftKey && anchorPayment) {
@@ -242,15 +278,40 @@ function wireLedger(u) {
   });
 }
 
+// 선택 행과 같은 달을 그 아래에 추가(분할입금). 선택 없으면 현재 달.
+function addPaymentSmart(u) {
+  const ref = selPayments.size ? (anchorPayment || [...selPayments][0]) : null;
+  let period = nowMonthKey(), insertIndex = u.payments.length;
+  const refIdx = ref ? u.payments.findIndex((p) => p.id === ref) : -1;
+  if (refIdx >= 0 && !u.payments[refIdx].isOpening) {
+    period = u.payments[refIdx].period; insertIndex = refIdx + 1;
+  } else {
+    let li = -1; u.payments.forEach((p, i) => { if (p.period === period && !p.isOpening) li = i; });
+    if (li >= 0) insertIndex = li + 1;
+  }
+  const hasExisting = u.payments.some((p) => p.period === period && !p.isOpening);
+  const due = hasExisting ? 0 : expectedVAT(u, period);
+  u.payments.splice(insertIndex, 0, { id: uid(), period, due, paid: 0, paidDate: null, memo: "" });
+}
+
+// "현재 달부터 입금 행 생성" — 첫 행에 과거 누적미납, 둘째 행부터 이번 달
+function startLedgerFromNow(u) {
+  u.payments = u.payments.filter((p) => p.isOpening || (p.paid || 0) !== 0 || p.paidDate || (p.memo || ""));
+  if (!u.payments.some((p) => p.isOpening)) u.payments.push({ id: uid(), period: "", due: 0, paid: 0, paidDate: null, memo: "", isOpening: true });
+  const cur = nowMonthKey();
+  if (!u.payments.some((p) => p.period === cur && !p.isOpening)) u.payments.push({ id: uid(), period: cur, due: expectedVAT(u, cur), paid: 0, paidDate: null, memo: "" });
+  u.payments.sort((a, b) => (a.period || "").localeCompare(b.period || ""));
+}
+
 function fillMissing(u) {
   if (u.status !== OCC || !u.startDate) return;
   const capYmd = (() => { const end = u.endDate ? ymdOf(u.endDate) : todayYmd(); return end < todayYmd() ? end : todayYmd(); })();
   const months = monthsBetween(ymdOf(u.startDate), capYmd);
   const existing = new Set(u.payments.map((p) => p.period));
-  const earliest = u.payments.map((p) => p.period).sort()[0];
+  const earliest = u.payments.filter((p) => !p.isOpening).map((p) => p.period).sort()[0];
   let added = false;
   for (const m of months) { if ((!earliest || m >= earliest) && !existing.has(m)) { u.payments.push({ id: uid(), period: m, due: expectedVAT(u, m), paid: 0, paidDate: null, memo: "" }); added = true; } }
-  if (added) u.payments.sort((a, b) => a.period.localeCompare(b.period));
+  if (added) u.payments.sort((a, b) => (a.period || "").localeCompare(b.period || ""));
 }
 function syncLedger(u) {
   if (u.status !== OCC || !u.startDate) return;
@@ -258,12 +319,13 @@ function syncLedger(u) {
   const months = monthsBetween(ymdOf(u.startDate), capYmd);
   const rangeSet = new Set(months);
   const empty = (p) => (p.paid || 0) === 0 && !(p.memo || "") && !p.paidDate;
-  u.payments = u.payments.filter((p) => rangeSet.has(p.period) || !empty(p));
-  for (const p of u.payments) if (rangeSet.has(p.period) && empty(p)) p.due = expectedVAT(u, p.period);
-  const existing = new Set(u.payments.map((p) => p.period));
-  const latest = u.payments.map((p) => p.period).sort().slice(-1)[0];
+  u.payments = u.payments.filter((p) => p.isOpening || rangeSet.has(p.period) || !empty(p));
+  for (const p of u.payments) if (!p.isOpening && rangeSet.has(p.period) && empty(p)) p.due = expectedVAT(u, p.period);
+  const real = u.payments.filter((p) => !p.isOpening).map((p) => p.period);
+  const existing = new Set(real);
+  const latest = real.slice().sort().slice(-1)[0];
   for (const m of months) if (!existing.has(m) && (!latest || m > latest)) u.payments.push({ id: uid(), period: m, due: expectedVAT(u, m), paid: 0, paidDate: null, memo: "" });
-  u.payments.sort((a, b) => a.period.localeCompare(b.period));
+  u.payments.sort((a, b) => (a.period || "").localeCompare(b.period || ""));
 }
 
 // ===== 세금계산서 알림 =====
@@ -375,6 +437,7 @@ function openUnitEditor(u) {
      <div class="field"><label>관리비 방식</label><select id="e-mode"><option ${u.maintMode === SAME ? "selected" : ""}>${SAME}</option><option ${u.maintMode === DIFF ? "selected" : ""}>${DIFF}</option></select></div>
      <div class="frow"><div class="field"><label id="lab-maint">관리비 (원)</label><input id="e-maint" inputmode="numeric" value="${u.maintenance ? won(u.maintenance) : ""}"></div>
        <div class="field" id="wrap-even"><label>관리비 · 짝수달 (원)</label><input id="e-even" inputmode="numeric" value="${u.maintEven ? won(u.maintEven) : ""}"></div></div>
+     <div class="field"><label class="cb"><input type="checkbox" id="e-gennow"> 현재 달부터 입금 행 생성 — 첫 행에 과거 누적미납 입력, 둘째 행부터 이번 달</label></div>
      <div class="field"><label>메모</label><input id="e-memo" value="${esc(u.memo || "")}"></div>`,
     `<button id="c">취소</button><button id="s" class="accent">저장</button>`);
   ["e-deposit", "e-rent", "e-maint", "e-even"].forEach((id) => bindMoney(ov.querySelector("#" + id)));
@@ -393,6 +456,7 @@ function openUnitEditor(u) {
     u.maintMode = mode.value; u.maintenance = parseNum(ov.querySelector("#e-maint").value);
     u.maintEven = mode.value === DIFF ? parseNum(ov.querySelector("#e-even").value) : 0;
     u.memo = ov.querySelector("#e-memo").value.trim();
+    if (ov.querySelector("#e-gennow").checked && u.status === OCC) startLedgerFromNow(u);
     syncLedger(u); save(); ov.remove(); renderAll();
   };
 }
