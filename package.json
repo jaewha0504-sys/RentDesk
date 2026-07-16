@@ -17,7 +17,7 @@
   "build": {
     "appId": "com.rentdesk.app",
     "productName": "RentDesk",
-    "publish": { "provider": "github", "owner": "jaewha0504-sys", "repo": "RentDesk" },
+    "publish": { "provider": "github", "owner": "jaewha0504-sys", "repo": "RentDesk", "releaseType": "release" },
     "files": ["main.js", "preload.js", "renderer/**/*", "icon/**/*"],
     "directories": { "buildResources": "build", "output": "dist" },
     "mac": { "category": "public.app-category.business", "target": "dmg", "identity": null, "icon": "build/icon.png" },
