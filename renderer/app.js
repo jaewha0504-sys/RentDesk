@@ -59,7 +59,17 @@ function maintFor(u, period) {
 }
 const expectedFor = (u, p) => (u.rent || 0) + maintFor(u, p);
 const expectedVAT = (u, p) => withVAT(expectedFor(u, p));
-const unpaidTotal = (u) => (u.payments || []).reduce((s, p) => s + (p.due || 0) - (p.paid || 0), 0);
+// 미납 합계 — 이번 달은 세금계산서 발행일 전까지 미납으로 치지 않고, 미래 달도 제외
+const unpaidTotal = (u) => {
+  const cur = nowMonthKey(), today = new Date().getDate();
+  return (u.payments || []).reduce((s, p) => {
+    if (!p.isOpening) {
+      if (p.period > cur) return s;                                        // 미래 달
+      if (p.period === cur && (u.taxDay || 0) > 0 && today < u.taxDay) return s; // 발행일 전
+    }
+    return s + (p.due || 0) - (p.paid || 0);
+  }, 0);
+};
 
 const building = () => data.buildings.find((b) => b.id === selBuildingId) || null;
 const unit = () => { const b = building(); return b ? (b.units.find((x) => x.id === selUnitId) || null) : null; };
@@ -212,7 +222,7 @@ function ledgerHTML(u) {
       </tr>`;
     }
     return `<tr data-id="${p.id}" class="${cls}">
-      <td>${esc(p.period)}</td>
+      <td class="dragcell" draggable="true" title="드래그해서 행 순서 이동">${esc(p.period)}</td>
       <td><input class="num d-due" inputmode="numeric" value="${p.due ? won(p.due) : ""}"></td>
       <td><input class="num d-paid" inputmode="numeric" value="${p.paid ? won(p.paid) : ""}"></td>
       <td><input type="date" class="d-date" value="${ymdOf(p.paidDate)}"></td>
@@ -265,6 +275,22 @@ function wireLedger(u) {
     if (dateIn) dateIn.onchange = () => { p.paidDate = dateIn.value ? isoOf(dateIn.value) : null; save(); };
     const memoIn = tr.querySelector(".d-memo");
     if (memoIn) memoIn.onchange = () => { p.memo = memoIn.value; save(); };
+    // 드래그로 행 순서 이동 (입금월 칸이 손잡이)
+    const dragCell = tr.querySelector(".dragcell");
+    if (dragCell) dragCell.ondragstart = (e) => e.dataTransfer.setData("text/plain", id);
+    tr.ondragover = (e) => e.preventDefault();
+    tr.ondrop = (e) => {
+      e.preventDefault();
+      const from = e.dataTransfer.getData("text/plain");
+      if (!from || from === id) return;
+      const fi = u.payments.findIndex((x) => x.id === from);
+      const src = u.payments[fi];
+      if (!src || src.isOpening) return;
+      u.payments.splice(fi, 1);
+      const ti = u.payments.findIndex((x) => x.id === id);
+      u.payments.splice(ti < 0 ? u.payments.length : ti, 0, src);
+      save(); renderDetail();
+    };
     tr.onclick = (e) => {
       if (e.target.tagName === "INPUT") return;
       if (e.shiftKey && anchorPayment) {
@@ -555,6 +581,36 @@ function previewFile(p, label) {
   ov.querySelector("#ext").onclick = () => window.api.openFile(p);
 }
 
+// ===== 백업 / 이동 =====
+function openBackup() {
+  const ov = modal("백업 / 다른 컴퓨터로 이동",
+    `<div class="muted">모든 데이터(건물·호실·입금내역·세금계산서 기록·퇴실 보관함)를 파일 하나(.json)로 내보내고,
+     다른 컴퓨터(윈도우·맥 어느 쪽이든)의 RentDesk에서 「백업 불러오기」로 그대로 이어서 쓸 수 있습니다.<br><br>
+     ※ 첨부파일(사업자등록증·계약서)은 백업에 포함되지 않으니 필요하면 따로 옮겨주세요.<br>
+     ※ 프로그램을 새 버전으로 재설치해도 데이터는 지워지지 않지만, 만약을 위해 업데이트 전 백업을 권장합니다.</div>`,
+    `<button id="exp" class="accent">백업 내보내기</button><button id="imp">백업 불러오기</button><span style="flex:1"></span><button id="c">닫기</button>`);
+  ov.querySelector("#c").onclick = () => ov.remove();
+  ov.querySelector("#exp").onclick = async () => {
+    const ok = await window.api.exportBackup(JSON.stringify(data, null, 2), `RentDesk-백업_${todayYmd()}.json`);
+    if (ok) { alert("백업을 내보냈습니다."); ov.remove(); }
+  };
+  ov.querySelector("#imp").onclick = async () => {
+    const raw = await window.api.importBackup();
+    if (!raw) return;
+    let parsed;
+    try { parsed = JSON.parse(raw.replace(/^﻿/, "")); } catch { return alert("RentDesk 백업 파일이 아니거나 읽을 수 없습니다."); }
+    if (!Array.isArray(parsed.buildings)) return alert("RentDesk 백업 파일이 아닙니다.");
+    if (!confirm("현재 이 컴퓨터의 데이터가 백업 파일 내용으로 전부 교체됩니다.\n계속할까요?")) return;
+    data = parsed;
+    data.buildings ||= []; data.moveOuts ||= []; data.taxIssued ||= [];
+    selBuildingId = data.buildings[0]?.id || null;
+    selUnitId = building()?.units[0]?.id || null;
+    selPayments.clear();
+    save(); ov.remove(); renderAll();
+    alert("백업을 불러왔습니다.");
+  };
+}
+
 // ===== CSV =====
 function exportCSV() {
   const head = ["건물명", "층", "호실", "상태", "임차인", "입금은행", "세금계산서발행일", "계약시작일", "계약종료일", "보증금", "월세", "관리비방식", "관리비", "관리비짝수달", "입금월", "입금예정액", "실입금액", "실입금일", "당월미납", "메모"];
@@ -576,6 +632,7 @@ document.getElementById("btnMoveOut").onclick = openMoveOut;
 document.getElementById("btnTax").onclick = openTaxMonth;
 document.getElementById("btnArchive").onclick = openArchive;
 document.getElementById("btnCsv").onclick = exportCSV;
+document.getElementById("btnBackup").onclick = openBackup;
 
 // ===== 창 크기 드래그 조절 =====
 function setupResizers() {
