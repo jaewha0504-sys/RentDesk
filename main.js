@@ -74,3 +74,16 @@ ipcMain.handle("saveAttachmentCopy", async (_e, srcPath) => {
   fs.copyFileSync(srcPath, res.filePath);
   return true;
 });
+
+// ---- 백업 (다른 컴퓨터/OS로 이동) ----
+ipcMain.handle("exportBackup", async (_e, { text, name }) => {
+  const res = await dialog.showSaveDialog({ defaultPath: name, filters: [{ name: "RentDesk 백업", extensions: ["json"] }] });
+  if (res.canceled || !res.filePath) return false;
+  fs.writeFileSync(res.filePath, text, "utf8");   // BOM 없이 (JSON 호환)
+  return true;
+});
+ipcMain.handle("importBackup", async () => {
+  const res = await dialog.showOpenDialog({ properties: ["openFile"], filters: [{ name: "RentDesk 백업", extensions: ["json"] }] });
+  if (res.canceled || !res.filePaths[0]) return null;
+  return fs.readFileSync(res.filePaths[0], "utf8");
+});

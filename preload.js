@@ -8,4 +8,6 @@ contextBridge.exposeInMainWorld("api", {
   removeFile: (p) => ipcRenderer.invoke("removeFile", p),
   exportCsv: (text, name) => ipcRenderer.invoke("exportCsv", { text, name }),
   saveAttachmentCopy: (p) => ipcRenderer.invoke("saveAttachmentCopy", p),
+  exportBackup: (text, name) => ipcRenderer.invoke("exportBackup", { text, name }),
+  importBackup: () => ipcRenderer.invoke("importBackup"),
 });
