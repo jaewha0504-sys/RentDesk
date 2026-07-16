@@ -86,6 +86,11 @@ td.green{color:var(--green);}
 tr.opening td{background:rgba(217,119,87,.06);}
 td.dragcell{cursor:grab;}
 td.dragcell:active{cursor:grabbing;}
+/* 행 드래그 정렬 애니메이션 */
+table.ledger tbody tr{transition:transform .16s ease;}
+table.ledger tbody tr.drag-row{transition:none;position:relative;z-index:10;}
+table.ledger tbody tr.drag-row td{background:var(--sel);box-shadow:0 4px 14px rgba(0,0,0,.15);}
+body.dragging-row, body.dragging-row *{cursor:grabbing!important;user-select:none;}
 
 /* 모달 */
 .overlay{position:fixed;inset:0;background:rgba(20,20,25,.45);display:flex;align-items:flex-start;justify-content:center;padding:40px 16px;overflow:auto;z-index:50;}

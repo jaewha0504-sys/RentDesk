@@ -222,7 +222,7 @@ function ledgerHTML(u) {
       </tr>`;
     }
     return `<tr data-id="${p.id}" class="${cls}">
-      <td class="dragcell" draggable="true" title="드래그해서 행 순서 이동">${esc(p.period)}</td>
+      <td class="dragcell" title="드래그해서 행 순서 이동">${esc(p.period)}</td>
       <td><input class="num d-due" inputmode="numeric" value="${p.due ? won(p.due) : ""}"></td>
       <td><input class="num d-paid" inputmode="numeric" value="${p.paid ? won(p.paid) : ""}"></td>
       <td><input type="date" class="d-date" value="${ymdOf(p.paidDate)}"></td>
@@ -275,22 +275,9 @@ function wireLedger(u) {
     if (dateIn) dateIn.onchange = () => { p.paidDate = dateIn.value ? isoOf(dateIn.value) : null; save(); };
     const memoIn = tr.querySelector(".d-memo");
     if (memoIn) memoIn.onchange = () => { p.memo = memoIn.value; save(); };
-    // 드래그로 행 순서 이동 (입금월 칸이 손잡이)
+    // 드래그로 행 순서 이동 (입금월 칸이 손잡이) — 행 전체가 따라오고 다른 행은 밀려남
     const dragCell = tr.querySelector(".dragcell");
-    if (dragCell) dragCell.ondragstart = (e) => e.dataTransfer.setData("text/plain", id);
-    tr.ondragover = (e) => e.preventDefault();
-    tr.ondrop = (e) => {
-      e.preventDefault();
-      const from = e.dataTransfer.getData("text/plain");
-      if (!from || from === id) return;
-      const fi = u.payments.findIndex((x) => x.id === from);
-      const src = u.payments[fi];
-      if (!src || src.isOpening) return;
-      u.payments.splice(fi, 1);
-      const ti = u.payments.findIndex((x) => x.id === id);
-      u.payments.splice(ti < 0 ? u.payments.length : ti, 0, src);
-      save(); renderDetail();
-    };
+    if (dragCell) dragCell.onmousedown = (e) => startRowDrag(e, tr, u);
     tr.onclick = (e) => {
       if (e.target.tagName === "INPUT") return;
       if (e.shiftKey && anchorPayment) {
@@ -302,6 +289,54 @@ function wireLedger(u) {
       renderDetail();
     };
   });
+}
+
+// 행 드래그 정렬 — 잡은 행이 마우스를 따라오고, 지나치는 행은 위/아래로 밀려나는 애니메이션
+function startRowDrag(e, tr, u) {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  const tbody = tr.parentElement;
+  const rows = [...tbody.querySelectorAll("tr[data-id]")];
+  const startIndex = rows.indexOf(tr);
+  const minIndex = u.payments.length && u.payments[0].isOpening ? 1 : 0; // 과거누적 행 위로는 못 감
+  const maxIndex = rows.length - 1;
+  if (startIndex < minIndex || maxIndex === minIndex) return; // 움직일 자리가 없으면 무시
+  const rowH = tr.offsetHeight;
+  const startY = e.clientY;
+  let curIndex = startIndex;
+
+  tr.classList.add("drag-row");
+  document.body.classList.add("dragging-row");
+
+  const onMove = (ev) => {
+    let dy = ev.clientY - startY;
+    dy = Math.max((minIndex - startIndex) * rowH, Math.min((maxIndex - startIndex) * rowH, dy));
+    tr.style.transform = `translateY(${dy}px)`;
+    const ni = Math.max(minIndex, Math.min(maxIndex, Math.round(startIndex + dy / rowH)));
+    if (ni !== curIndex) {
+      curIndex = ni;
+      rows.forEach((r, i) => {
+        if (r === tr) return;
+        let shift = 0;
+        if (startIndex < curIndex && i > startIndex && i <= curIndex) shift = -rowH;
+        else if (startIndex > curIndex && i >= curIndex && i < startIndex) shift = rowH;
+        r.style.transform = shift ? `translateY(${shift}px)` : "";
+      });
+    }
+  };
+  const onUp = () => {
+    document.removeEventListener("mousemove", onMove);
+    document.removeEventListener("mouseup", onUp);
+    document.body.classList.remove("dragging-row");
+    if (curIndex !== startIndex) {
+      const [moved] = u.payments.splice(startIndex, 1);
+      u.payments.splice(curIndex, 0, moved);
+      save();
+    }
+    renderDetail();
+  };
+  document.addEventListener("mousemove", onMove);
+  document.addEventListener("mouseup", onUp);
 }
 
 // 선택 행과 같은 달을 그 아래에 추가(분할입금). 선택 없으면 현재 달.
@@ -394,7 +429,7 @@ function renderTax() {
 function modal(title, bodyHTML, footHTML, wide) {
   const ov = document.createElement("div"); ov.className = "overlay";
   ov.innerHTML = `<div class="modal${wide ? " wide" : ""}"><h3>${esc(title)}</h3><div class="body">${bodyHTML}</div><div class="foot">${footHTML}</div></div>`;
-  ov.onclick = (e) => { if (e.target === ov) ov.remove(); };
+  // 바깥 클릭으로는 닫히지 않음 — 취소/닫기 버튼으로만 닫기 (실수 방지)
   document.getElementById("modalRoot").appendChild(ov);
   return ov;
 }
