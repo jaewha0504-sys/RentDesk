@@ -18,6 +18,7 @@ jobs:
           node-version: "22"
       - run: npm install
       - run: npx electron-builder --win --publish always -c.extraMetadata.version=1.0.${{ github.run_number }}
+        shell: cmd
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/upload-artifact@v4
