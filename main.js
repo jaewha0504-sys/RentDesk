@@ -28,8 +28,29 @@ function createWindow() {
   win.loadFile(path.join(__dirname, "renderer", "index.html"));
 }
 
+// ---- 자동 업데이트 (GitHub Releases에서 새 버전 확인) ----
+function setupAutoUpdate() {
+  if (!app.isPackaged) return;   // 개발 실행 중에는 건너뜀
+  let autoUpdater;
+  try { ({ autoUpdater } = require("electron-updater")); } catch { return; }
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;   // "나중에" 해도 앱 종료 시 자동 적용
+  autoUpdater.on("update-downloaded", (info) => {
+    dialog.showMessageBox({
+      type: "info",
+      buttons: ["지금 재시작", "나중에 (종료할 때 적용)"],
+      defaultId: 0,
+      message: "업데이트 준비 완료",
+      detail: `새 버전(v${info.version})을 내려받았습니다.\n재시작하면 적용됩니다. 데이터는 그대로 유지됩니다.`,
+    }).then((r) => { if (r.response === 0) autoUpdater.quitAndInstall(); });
+  });
+  autoUpdater.on("error", () => {});   // 오프라인 등은 조용히 무시
+  autoUpdater.checkForUpdates().catch(() => {});
+}
+
 app.whenReady().then(() => {
   createWindow();
+  setupAutoUpdate();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

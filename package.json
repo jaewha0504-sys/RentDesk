@@ -5,14 +5,19 @@
   "main": "main.js",
   "author": "RentDesk",
   "license": "UNLICENSED",
+  "repository": "github:jaewha0504-sys/RentDesk",
   "scripts": {
     "start": "electron .",
-    "dist:mac": "electron-builder --mac",
-    "dist:win": "electron-builder --win"
+    "dist:mac": "electron-builder --mac --publish never",
+    "dist:win": "electron-builder --win --publish never"
+  },
+  "dependencies": {
+    "electron-updater": "^6.3.9"
   },
   "build": {
     "appId": "com.rentdesk.app",
     "productName": "RentDesk",
+    "publish": { "provider": "github", "owner": "jaewha0504-sys", "repo": "RentDesk" },
     "files": ["main.js", "preload.js", "renderer/**/*", "icon/**/*"],
     "directories": { "buildResources": "build", "output": "dist" },
     "mac": { "category": "public.app-category.business", "target": "dmg", "identity": null, "icon": "build/icon.png" },
