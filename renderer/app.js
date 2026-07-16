@@ -294,22 +294,26 @@ function wireLedger(u) {
 // 행 드래그 정렬 — 잡은 행이 마우스를 따라오고, 지나치는 행은 위/아래로 밀려나는 애니메이션
 function startRowDrag(e, tr, u) {
   if (e.button !== 0) return;
-  e.preventDefault();
   const tbody = tr.parentElement;
   const rows = [...tbody.querySelectorAll("tr[data-id]")];
   const startIndex = rows.indexOf(tr);
   const minIndex = u.payments.length && u.payments[0].isOpening ? 1 : 0; // 과거누적 행 위로는 못 감
   const maxIndex = rows.length - 1;
   if (startIndex < minIndex || maxIndex === minIndex) return; // 움직일 자리가 없으면 무시
+  e.preventDefault();
   const rowH = tr.offsetHeight;
   const startY = e.clientY;
   let curIndex = startIndex;
-
-  tr.classList.add("drag-row");
-  document.body.classList.add("dragging-row");
+  let moved = false;   // 3px 이상 움직여야 드래그로 간주 — 그냥 클릭이면 행 선택이 정상 동작
 
   const onMove = (ev) => {
     let dy = ev.clientY - startY;
+    if (!moved) {
+      if (Math.abs(dy) < 3) return;
+      moved = true;
+      tr.classList.add("drag-row");
+      document.body.classList.add("dragging-row");
+    }
     dy = Math.max((minIndex - startIndex) * rowH, Math.min((maxIndex - startIndex) * rowH, dy));
     tr.style.transform = `translateY(${dy}px)`;
     const ni = Math.max(minIndex, Math.min(maxIndex, Math.round(startIndex + dy / rowH)));
@@ -328,9 +332,10 @@ function startRowDrag(e, tr, u) {
     document.removeEventListener("mousemove", onMove);
     document.removeEventListener("mouseup", onUp);
     document.body.classList.remove("dragging-row");
+    if (!moved) return;   // 클릭이었으면 표를 건드리지 않음 → 이어지는 클릭 이벤트가 행 선택 처리
     if (curIndex !== startIndex) {
-      const [moved] = u.payments.splice(startIndex, 1);
-      u.payments.splice(curIndex, 0, moved);
+      const [m] = u.payments.splice(startIndex, 1);
+      u.payments.splice(curIndex, 0, m);
       save();
     }
     renderDetail();
@@ -418,7 +423,7 @@ function renderTax() {
     const st = i.issued ? "발행 완료" : (i.isPast ? `${i.period} 미발행` : (i.overdue ? `발행 필요 (매달 ${i.u.taxDay}일)` : `이번 달 ${i.u.taxDay}일`));
     const cls = i.issued ? "green" : (i.overdue ? "red" : "gray");
     return `<div class="taxitem"><input type="checkbox" data-u="${i.u.id}" data-p="${i.period}" ${i.issued ? "checked" : ""}>
-      <div><div>${esc(i.b.name)} ${esc([i.u.floor, i.u.unit].filter(Boolean).join(" "))}</div><div class="st ${cls}">${st}</div></div></div>`;
+      <div><div>${esc(i.b.name)} ${esc([i.u.floor, i.u.unit].filter(Boolean).join(" "))}</div><div class="st ${cls}">${i.u.tenant ? esc(i.u.tenant) + " · " : ""}${st}</div></div></div>`;
   }).join("") || `<div class="muted">이번 달 발행할 항목이 없습니다.</div>`;
   host.innerHTML = `<div class="thead"><span class="ttl">세금계산서 발행</span><span>${need ? `<span class="pill">${need}건</span> ` : ""}<button id="btnTaxMonth" style="padding:2px 8px">월별</button></span></div>${rows}`;
   host.querySelectorAll('input[type="checkbox"]').forEach((cb) => cb.onchange = () => { setTaxIssued(cb.dataset.u, cb.dataset.p, cb.checked); renderTax(); });
