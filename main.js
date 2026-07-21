@@ -79,23 +79,84 @@ function createWindow() {
 }
 
 // ---- 자동 업데이트 (GitHub Releases에서 새 버전 확인) ----
+const RELEASES_URL = "https://github.com/jaewha0504-sys/RentDesk/releases/latest";
+
+// 업데이트가 왜 안 됐는지 나중에 확인할 수 있도록 파일로 남긴다
+function updLog(...parts) {
+  try {
+    const line = `[${new Date().toISOString()}] ${parts.join(" ")}\n`;
+    fs.appendFileSync(path.join(dataDir(), "update.log"), line, "utf8");
+  } catch {}
+}
+
 function setupAutoUpdate() {
   if (!app.isPackaged) return;   // 개발 실행 중에는 건너뜀
   let autoUpdater;
   try { ({ autoUpdater } = require("electron-updater")); } catch { return; }
+
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;   // "나중에" 해도 앱 종료 시 자동 적용
+  autoUpdater.logger = {
+    info: (m) => updLog("INFO", m),
+    warn: (m) => updLog("WARN", m),
+    error: (m) => updLog("ERROR", m),
+    debug: () => {},
+  };
+  updLog("현재 버전", app.getVersion(), "— 업데이트 확인 시작");
+
+  // 설치 실행이 막혔을 때 안내 + 수동 설치로 이어주기
+  const manualFallback = (detail) => {
+    dialog.showMessageBox({
+      type: "warning",
+      buttons: ["다운로드 페이지 열기", "닫기"],
+      defaultId: 0,
+      cancelId: 1,
+      message: "자동 설치를 시작하지 못했습니다",
+      detail: `${detail}\n\n다운로드 페이지에서 설치 파일을 직접 받아 실행하셔도 됩니다.\n기존 데이터는 그대로 유지됩니다.`,
+    }).then((r) => { if (r.response === 0) shell.openExternal(RELEASES_URL); });
+  };
+
   autoUpdater.on("update-downloaded", (info) => {
+    updLog("다운로드 완료", info.version);
     dialog.showMessageBox({
       type: "info",
       buttons: ["지금 재시작", "나중에 (종료할 때 적용)"],
       defaultId: 0,
       message: "업데이트 준비 완료",
       detail: `새 버전(v${info.version})을 내려받았습니다.\n재시작하면 적용됩니다. 데이터는 그대로 유지됩니다.`,
-    }).then((r) => { if (r.response === 0) autoUpdater.quitAndInstall(); });
+    }).then((r) => {
+      if (r.response !== 0) return;
+      updLog("quitAndInstall 호출");
+      quitting = true;              // 종료 확인창이 다시 뜨지 않게
+      try {
+        autoUpdater.quitAndInstall();
+        // 설치 프로그램이 떴다면 앱은 곧 종료된다. 그대로 살아있으면 실패한 것.
+        setTimeout(() => {
+          if (app.isReady()) {
+            updLog("quitAndInstall 후에도 앱이 종료되지 않음 — 설치 실행 실패로 판단");
+            quitting = false;
+            manualFallback("설치 프로그램이 실행되지 않았습니다. 백신이나 Windows 보안 기능이 막았을 수 있습니다.");
+          }
+        }, 8000);
+      } catch (e) {
+        updLog("quitAndInstall 예외", String(e));
+        quitting = false;
+        manualFallback(String(e && e.message ? e.message : e));
+      }
+    });
   });
-  autoUpdater.on("error", () => {});   // 오프라인 등은 조용히 무시
-  autoUpdater.checkForUpdates().catch(() => {});
+
+  autoUpdater.on("error", (err) => {
+    const msg = String(err && err.message ? err.message : err);
+    updLog("오류", msg);
+    // 오프라인·네트워크 문제는 조용히 넘기고, 설치 단계 오류만 알린다
+    if (/install|spawn|ENOENT|EACCES|EPERM|elevate/i.test(msg)) {
+      quitting = false;
+      manualFallback(msg);
+    }
+  });
+
+  autoUpdater.checkForUpdates().catch((e) => updLog("확인 실패", String(e)));
 }
 
 app.whenReady().then(() => {
