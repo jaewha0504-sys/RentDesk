@@ -53,9 +53,49 @@ function recentMonths(n) {
   return out;
 }
 
-function maintFor(u, period) {
-  if ((u.maintMode || SAME) === DIFF) { const mm = parseInt(period.split("-")[1], 10) || 1; return mm % 2 === 0 ? (u.maintEven || 0) : (u.maintenance || 0); }
-  return u.maintenance || 0;
+// 공용요금(공동수도·공동전기) — 홀/짝수달 금액이 다를 때 사용
+const hasCommon = (u) => (u.commonOdd || 0) > 0 || (u.commonEven || 0) > 0;
+function commonFor(u, period) {
+  const mm = parseInt(String(period).split("-")[1], 10) || 1;
+  return mm % 2 === 0 ? (u.commonEven || 0) : (u.commonOdd || 0);
+}
+// 그 달의 관리비 + 공용요금
+function maintFor(u, period) { return (u.maintenance || 0) + commonFor(u, period); }
+
+/// 부가세액만 (합계 - 공급가액)
+const vatOnly = (v) => withVAT(v) - (Number(v) || 0);
+
+/// 휴대폰 자동 하이픈 (3-4-4)
+function formatPhone(s) {
+  const d = String(s).replace(/[^0-9]/g, "").slice(0, 11);
+  if (d.length <= 3) return d;
+  if (d.length <= 7) return `${d.slice(0, 3)}-${d.slice(3)}`;
+  return `${d.slice(0, 3)}-${d.slice(3, 7)}-${d.slice(7)}`;
+}
+/// 사업자등록번호 자동 하이픈 (3-2-5)
+function formatBizNo(s) {
+  const d = String(s).replace(/[^0-9]/g, "").slice(0, 10);
+  if (d.length <= 3) return d;
+  if (d.length <= 5) return `${d.slice(0, 3)}-${d.slice(3)}`;
+  return `${d.slice(0, 3)}-${d.slice(3, 5)}-${d.slice(5)}`;
+}
+
+/// 구버전 "관리비 짝/홀수달 상이" → "관리비(동일) + 공용요금(홀/짝)" 구조로 이전
+function migrateCommonFee(d) {
+  let changed = false;
+  for (const b of d.buildings || []) {
+    for (const u of b.units || []) {
+      if (u.maintMode !== DIFF || u.commonOdd != null || u.commonEven != null) continue;
+      const base = Math.min(u.maintenance || 0, u.maintEven || 0);
+      u.commonOdd = (u.maintenance || 0) - base;
+      u.commonEven = (u.maintEven || 0) - base;
+      u.maintenance = base;
+      u.maintEven = 0;
+      u.maintMode = SAME;
+      changed = true;
+    }
+  }
+  return changed;
 }
 const expectedFor = (u, p) => (u.rent || 0) + maintFor(u, p);
 const expectedVAT = (u, p) => withVAT(expectedFor(u, p));
@@ -81,6 +121,7 @@ async function load() {
   const raw = await window.api.load();
   if (raw) { try { data = JSON.parse(raw); } catch { data = { buildings: [], moveOuts: [], taxIssued: [] }; } }
   data.buildings ||= []; data.moveOuts ||= []; data.taxIssued ||= [];
+  if (migrateCommonFee(data)) save();   // 구조 바뀌었으면 즉시 저장
   if (data.buildings.length === 0) seed();
   selBuildingId = data.buildings[0]?.id || null;
   selUnitId = building()?.units[0]?.id || null;
@@ -92,7 +133,7 @@ function seed() {
     const base = withVAT(rent + maint);
     return months.map((m, i) => { const unpaid = i >= months.length - unpaidN; return { id: uid(), period: m, due: base, paid: unpaid ? 0 : base, paidDate: unpaid ? null : isoOf(m + "-05"), memo: "" }; });
   };
-  const U = (o) => Object.assign({ id: uid(), floor: "", unit: "", status: OCC, tenant: "", taxDay: 0, bank: "", startDate: null, endDate: null, deposit: 0, rent: 0, maintMode: SAME, maintenance: 0, maintEven: 0, memo: "", businessCert: null, contract: null, payments: [] }, o);
+  const U = (o) => Object.assign({ id: uid(), floor: "", unit: "", status: OCC, tenant: "", owner: null, phone: null, bizNo: null, taxDay: 0, bank: "", startDate: null, endDate: null, deposit: 0, rent: 0, maintMode: SAME, maintenance: 0, maintEven: 0, memo: "", businessCert: null, contract: null, payments: [] }, o);
   data.buildings = [
     { id: uid(), name: "강남 본사빌딩", address: "서울시 강남구", memo: "", units: [
       U({ floor: "3층", unit: "301호", tenant: "(주)미래상사", taxDay: 1, bank: "국민은행", startDate: isoOf("2024-03-01"), endDate: isoOf("2026-02-28"), deposit: 50000000, rent: 3000000, maintenance: 400000, payments: pays(3000000, 400000, 0) }),
@@ -155,8 +196,13 @@ function markUnitSel() { document.querySelectorAll("#unitList .row").forEach((el
 
 // ----- 상세 -----
 function vatPair(v) { return `${won(v)} 원 (부가세 포함 ${won(withVAT(v))} 원)`; }
-function maintText(u) { return u.maintMode === DIFF ? `홀수달 ${vatPair(u.maintenance)}\n짝수달 ${vatPair(u.maintEven)}` : vatPair(u.maintenance); }
-function expectedText(u) { return u.maintMode === DIFF ? `홀수달 ${vatPair((u.rent || 0) + (u.maintenance || 0))}\n짝수달 ${vatPair((u.rent || 0) + (u.maintEven || 0))}` : vatPair((u.rent || 0) + (u.maintenance || 0)); }
+function maintText(u) { return vatPair(u.maintenance || 0); }
+function commonText(u) { return `홀수달 ${vatPair(u.commonOdd || 0)}\n짝수달 ${vatPair(u.commonEven || 0)}`; }
+function expectedText(u) {
+  const r = u.rent || 0, m = u.maintenance || 0;
+  if (hasCommon(u)) return `홀수달 ${vatPair(r + m + (u.commonOdd || 0))}\n짝수달 ${vatPair(r + m + (u.commonEven || 0))}`;
+  return vatPair(r + m);
+}
 function periodText(u) {
   if (!u.startDate && !u.endDate) return "—";
   let s = `${ymdOf(u.startDate) || "?"} ~ ${ymdOf(u.endDate) || "?"}`;
@@ -179,15 +225,27 @@ function renderDetail() {
   if (u.status === VAC) {
     host.innerHTML = head + `<div class="vacant-note">이 호실은 현재 공실입니다.<br>‘정보 수정’에서 임대중으로 바꾸면 정보·입금내역이 표시됩니다.</div>`;
   } else {
+    const row = (lab, val) => `<div class="inforow"><span class="lab">${lab}</span><span class="val">${val}</span></div>`;
+    // 왼쪽: 임차인·대표자·연락처·입금은행·발행일·계약기간 / 오른쪽: 사업자등록번호·보증금·월세·관리비(·공용요금)·총액
+    const left = [
+      row("임차인", esc(u.tenant || "—")),
+      row("대표자", esc(u.owner || "—")),
+      row("연락처", esc(u.phone || "—")),
+      row("입금은행", esc(u.bank || "—")),
+      row("세금계산서 발행일", u.taxDay > 0 ? "매달 " + u.taxDay + "일" : "—"),
+      row("계약기간", periodText(u)),
+    ];
+    const right = [
+      row("사업자등록번호", esc(u.bizNo || "—")),
+      row("보증금", wonStr(u.deposit)),
+      row("월세", vatPair(u.rent)),
+      row("관리비", maintText(u)),
+      ...(hasCommon(u) ? [row("공용요금", commonText(u))] : []),
+      row("총 입금예정금액", expectedText(u)),
+    ];
     const info = `<div class="infocard">
-      <div class="inforow"><span class="lab">임차인</span><span class="val">${esc(u.tenant || "—")}</span></div>
-      <div class="inforow"><span class="lab">보증금</span><span class="val">${wonStr(u.deposit)}</span></div>
-      <div class="inforow"><span class="lab">입금은행</span><span class="val">${esc(u.bank || "—")}</span></div>
-      <div class="inforow"><span class="lab">월세</span><span class="val">${vatPair(u.rent)}</span></div>
-      <div class="inforow"><span class="lab">세금계산서 발행일</span><span class="val">${u.taxDay > 0 ? "매달 " + u.taxDay + "일" : "—"}</span></div>
-      <div class="inforow"><span class="lab">관리비</span><span class="val">${maintText(u)}</span></div>
-      <div class="inforow"><span class="lab">계약기간</span><span class="val">${periodText(u)}</span></div>
-      <div class="inforow"><span class="lab">총 입금예정금액</span><span class="val">${expectedText(u)}</span></div>
+      <div class="infocol">${left.join("")}</div>
+      <div class="infocol">${right.join("")}</div>
     </div>`;
     host.innerHTML = head + info + ledgerHTML(u);
     wireLedger(u);
@@ -485,7 +543,7 @@ function openAddRoom() {
     let unitv = single.checked ? "" : unitIn.value.trim();
     if (unitv && /^[0-9]+$/.test(unitv)) unitv += "호";
     if (!floor && !unitv) return alert("층 또는 호실을 입력하세요.");
-    const nu = { id: uid(), floor, unit: unitv, status: OCC, tenant: "", taxDay: 0, bank: "", startDate: null, endDate: null, deposit: 0, rent: 0, maintMode: SAME, maintenance: 0, maintEven: 0, memo: "", businessCert: null, contract: null, payments: [] };
+    const nu = { id: uid(), floor, unit: unitv, status: OCC, tenant: "", owner: null, phone: null, bizNo: null, taxDay: 0, bank: "", startDate: null, endDate: null, deposit: 0, rent: 0, maintMode: SAME, maintenance: 0, maintEven: 0, memo: "", businessCert: null, contract: null, payments: [] };
     building().units.push(nu); selUnitId = nu.id; save(); ov.remove(); renderAll();
   };
 }
@@ -494,33 +552,46 @@ function openUnitEditor(u) {
   const ov = modal(`호실 정보 수정 — ${[u.floor, u.unit].filter(Boolean).join(" ")}`,
     `<div class="field"><label>공실 여부</label><select id="e-status"><option ${u.status === OCC ? "selected" : ""}>${OCC}</option><option ${u.status === VAC ? "selected" : ""}>${VAC}</option></select></div>
      <div class="field"><label>임차인</label><input id="e-tenant" value="${esc(u.tenant || "")}" placeholder="예: (주)○○상사"></div>
+     <div class="frow"><div class="field"><label>대표자</label><input id="e-owner" value="${esc(u.owner || "")}" placeholder="예: 홍길동"></div>
+       <div class="field"><label>연락처</label><input id="e-phone" value="${esc(u.phone || "")}" placeholder="숫자만 입력하면 자동 하이픈"></div></div>
+     <div class="field"><label>사업자등록번호</label><input id="e-bizno" value="${esc(u.bizNo || "")}" placeholder="숫자만 입력하면 자동 하이픈"></div>
      <div class="frow"><div class="field"><label>세금계산서 발행일 (매달 N일)</label><input id="e-tax" inputmode="numeric" value="${u.taxDay || ""}" placeholder="예: 1"></div>
        <div class="field"><label>입금은행</label><input id="e-bank" value="${esc(u.bank || "")}" placeholder="예: 국민은행"></div></div>
      <div class="frow"><div class="field"><label>계약 시작일</label><input type="date" id="e-start" value="${ymdOf(u.startDate)}"></div>
        <div class="field"><label>계약 종료일</label><input type="date" id="e-end" value="${ymdOf(u.endDate)}"></div></div>
      <div class="frow"><div class="field"><label>보증금 (원)</label><input id="e-deposit" inputmode="numeric" value="${u.deposit ? won(u.deposit) : ""}"></div>
        <div class="field"><label>월세 (원)</label><input id="e-rent" inputmode="numeric" value="${u.rent ? won(u.rent) : ""}"></div></div>
-     <div class="field"><label>관리비 방식</label><select id="e-mode"><option ${u.maintMode === SAME ? "selected" : ""}>${SAME}</option><option ${u.maintMode === DIFF ? "selected" : ""}>${DIFF}</option></select></div>
-     <div class="frow"><div class="field"><label id="lab-maint">관리비 (원)</label><input id="e-maint" inputmode="numeric" value="${u.maintenance ? won(u.maintenance) : ""}"></div>
-       <div class="field" id="wrap-even"><label>관리비 · 짝수달 (원)</label><input id="e-even" inputmode="numeric" value="${u.maintEven ? won(u.maintEven) : ""}"></div></div>
+     <div class="field"><label>관리비 (원)</label><input id="e-maint" inputmode="numeric" value="${u.maintenance ? won(u.maintenance) : ""}"></div>
+     <div class="field"><label class="cb"><input type="checkbox" id="e-usecommon" ${hasCommon(u) ? "checked" : ""}> 공용요금 따로 청구 (공동수도·공동전기) — 홀수달·짝수달 금액이 다를 때</label></div>
+     <div class="frow" id="wrap-common"><div class="field"><label>공용요금 · 홀수달 (원)</label><input id="e-codd" inputmode="numeric" value="${u.commonOdd ? won(u.commonOdd) : ""}"></div>
+       <div class="field"><label>공용요금 · 짝수달 (원)</label><input id="e-ceven" inputmode="numeric" value="${u.commonEven ? won(u.commonEven) : ""}"></div></div>
      <div class="field"><label class="cb"><input type="checkbox" id="e-gennow"> 현재 달부터 입금 행 생성 — 첫 행에 과거 누적미납 입력, 둘째 행부터 이번 달</label></div>
      <div class="field"><label>메모</label><input id="e-memo" value="${esc(u.memo || "")}"></div>`,
     `<button id="c">취소</button><button id="s" class="accent">저장</button>`);
-  ["e-deposit", "e-rent", "e-maint", "e-even"].forEach((id) => bindMoney(ov.querySelector("#" + id)));
-  const status = ov.querySelector("#e-status"), mode = ov.querySelector("#e-mode");
-  const lockFields = ["e-tenant", "e-tax", "e-bank", "e-start", "e-end", "e-deposit"];
+  ["e-deposit", "e-rent", "e-maint", "e-codd", "e-ceven"].forEach((id) => bindMoney(ov.querySelector("#" + id)));
+  // 연락처·사업자등록번호 자동 하이픈
+  const phoneIn = ov.querySelector("#e-phone"), bizIn = ov.querySelector("#e-bizno");
+  phoneIn.addEventListener("input", () => { phoneIn.value = formatPhone(phoneIn.value); });
+  bizIn.addEventListener("input", () => { bizIn.value = formatBizNo(bizIn.value); });
+  const status = ov.querySelector("#e-status"), useCommon = ov.querySelector("#e-usecommon");
+  const lockFields = ["e-tenant", "e-owner", "e-phone", "e-bizno", "e-tax", "e-bank", "e-start", "e-end", "e-deposit"];
   const applyStatus = () => { const occ = status.value === OCC; lockFields.forEach((id) => ov.querySelector("#" + id).disabled = !occ); };
-  const applyMode = () => { const diff = mode.value === DIFF; ov.querySelector("#wrap-even").style.display = diff ? "" : "none"; ov.querySelector("#lab-maint").textContent = diff ? "관리비 · 홀수달 (원)" : "관리비 (원)"; };
-  status.onchange = applyStatus; mode.onchange = applyMode; applyStatus(); applyMode();
+  const applyCommon = () => { ov.querySelector("#wrap-common").style.display = useCommon.checked ? "" : "none"; };
+  status.onchange = applyStatus; useCommon.onchange = applyCommon; applyStatus(); applyCommon();
   ov.querySelector("#c").onclick = () => ov.remove();
   ov.querySelector("#s").onclick = () => {
     u.status = status.value; u.tenant = ov.querySelector("#e-tenant").value.trim();
+    u.owner = ov.querySelector("#e-owner").value.trim() || null;
+    u.phone = phoneIn.value.trim() || null;
+    u.bizNo = bizIn.value.trim() || null;
     u.taxDay = Math.min(Math.max(parseNum(ov.querySelector("#e-tax").value), 0), 31);
     u.bank = ov.querySelector("#e-bank").value.trim();
     u.startDate = isoOf(ov.querySelector("#e-start").value); u.endDate = isoOf(ov.querySelector("#e-end").value);
     u.deposit = parseNum(ov.querySelector("#e-deposit").value); u.rent = parseNum(ov.querySelector("#e-rent").value);
-    u.maintMode = mode.value; u.maintenance = parseNum(ov.querySelector("#e-maint").value);
-    u.maintEven = mode.value === DIFF ? parseNum(ov.querySelector("#e-even").value) : 0;
+    u.maintenance = parseNum(ov.querySelector("#e-maint").value);
+    u.maintMode = SAME; u.maintEven = 0;
+    u.commonOdd = useCommon.checked ? parseNum(ov.querySelector("#e-codd").value) : null;
+    u.commonEven = useCommon.checked ? parseNum(ov.querySelector("#e-ceven").value) : null;
     u.memo = ov.querySelector("#e-memo").value.trim();
     if (ov.querySelector("#e-gennow").checked && u.status === OCC) startLedgerFromNow(u);
     syncLedger(u); save(); ov.remove(); renderAll();
@@ -539,8 +610,8 @@ function openMoveOut() {
   ov.querySelector("#c").onclick = () => ov.remove();
   ov.querySelector("#s").onclick = () => {
     const td = u.payments.reduce((s, p) => s + (p.due || 0), 0), tp = u.payments.reduce((s, p) => s + (p.paid || 0), 0);
-    data.moveOuts.unshift({ id: uid(), buildingName: b.name, floor: u.floor, unit: u.unit, tenant: u.tenant, bank: u.bank, taxDay: u.taxDay, startDate: u.startDate, endDate: u.endDate, deposit: u.deposit, rent: u.rent, maintenance: u.maintenance, maintMode: u.maintMode, maintEven: u.maintEven, totalDue: td, totalPaid: tp, unpaid: td - tp, moveOutDate: isoOf(ov.querySelector("#e-date").value), memo: ov.querySelector("#e-memo").value.trim(), archivedAt: isoOf(todayYmd()), payments: u.payments });
-    Object.assign(u, { status: VAC, tenant: "", bank: "", taxDay: 0, startDate: null, endDate: null, deposit: 0, payments: [] });
+    data.moveOuts.unshift({ id: uid(), buildingName: b.name, floor: u.floor, unit: u.unit, tenant: u.tenant, owner: u.owner, phone: u.phone, bizNo: u.bizNo, bank: u.bank, taxDay: u.taxDay, startDate: u.startDate, endDate: u.endDate, deposit: u.deposit, rent: u.rent, maintenance: u.maintenance, maintMode: u.maintMode, maintEven: u.maintEven, commonOdd: u.commonOdd, commonEven: u.commonEven, totalDue: td, totalPaid: tp, unpaid: td - tp, moveOutDate: isoOf(ov.querySelector("#e-date").value), memo: ov.querySelector("#e-memo").value.trim(), archivedAt: isoOf(todayYmd()), payments: u.payments });
+    Object.assign(u, { status: VAC, tenant: "", owner: null, phone: null, bizNo: null, bank: "", taxDay: 0, startDate: null, endDate: null, deposit: 0, payments: [] });
     save(); ov.remove(); renderAll();
   };
 }
@@ -556,7 +627,7 @@ function openArchive() {
   ov.querySelectorAll("#arows tr[data-id]").forEach((tr) => tr.onclick = () => {
     sel = tr.dataset.id; ov.querySelectorAll("#arows tr").forEach((t) => t.classList.remove("sel")); tr.classList.add("sel");
     const m = list.find((x) => x.id === sel);
-    ov.querySelector("#adetail").innerHTML = `<b>${esc(m.buildingName)} ${esc([m.floor, m.unit].filter(Boolean).join(" "))}</b> · 임차인 ${esc(m.tenant)} · 은행 ${esc(m.bank || "—")}<br>계약 ${ymdOf(m.startDate)}~${ymdOf(m.endDate)} · 보증금 ${won(m.deposit)} · 월세 ${won(m.rent)}<br>총예정 ${won(m.totalDue)} / 총입금 ${won(m.totalPaid)} / 미납 ${won(m.unpaid)} · 메모 ${esc(m.memo || "—")}`;
+    ov.querySelector("#adetail").innerHTML = `<b>${esc(m.buildingName)} ${esc([m.floor, m.unit].filter(Boolean).join(" "))}</b> · 임차인 ${esc(m.tenant)} · 대표자 ${esc(m.owner || "—")} · 연락처 ${esc(m.phone || "—")}<br>사업자등록번호 ${esc(m.bizNo || "—")} · 은행 ${esc(m.bank || "—")}<br>계약 ${ymdOf(m.startDate)}~${ymdOf(m.endDate)} · 보증금 ${won(m.deposit)} · 월세 ${won(m.rent)}<br>총예정 ${won(m.totalDue)} / 총입금 ${won(m.totalPaid)} / 미납 ${won(m.unpaid)} · 메모 ${esc(m.memo || "—")}`;
   });
   ov.querySelector("#c").onclick = () => ov.remove();
   ov.querySelector("#del").onclick = () => { if (!sel) return alert("삭제할 항목을 선택하세요."); if (confirm("영구 삭제할까요? 복구할 수 없습니다.")) { data.moveOuts = data.moveOuts.filter((m) => m.id !== sel); save(); ov.remove(); openArchive(); } };
@@ -621,25 +692,90 @@ function previewFile(p, label) {
   ov.querySelector("#ext").onclick = () => window.api.openFile(p);
 }
 
+// ===== 엑셀 내보내기 (세무사 제출용) =====
+function openExcelExport() {
+  const now = new Date();
+  const curYear = now.getFullYear();
+  const curQ = Math.floor(now.getMonth() / 3) + 1;
+  const saved = localStorage.getItem("excelCompanyName") || "조아조아(주)";
+  const years = [];
+  for (let y = curYear + 1; y >= curYear - 5; y--) years.push(y);
+
+  const ov = modal("엑셀 내보내기 (세무사 제출용)",
+    `<div class="field"><label>회사명</label><input id="x-company" value="${esc(saved)}" placeholder="예: 조아조아(주)"></div>
+     <div class="frow">
+       <div class="field"><label>연도</label><select id="x-year">${years.map((y) => `<option value="${y}" ${y === curYear ? "selected" : ""}>${y}년</option>`).join("")}</select></div>
+       <div class="field"><label>분기</label><select id="x-q">${[1, 2, 3, 4].map((q) => `<option value="${q}" ${q === curQ ? "selected" : ""}>${q}분기</option>`).join("")}</select></div>
+     </div>
+     <div class="muted" id="x-info"></div>`,
+    `<button id="c">취소</button><button id="s" class="accent">엑셀 만들기</button>`);
+
+  const info = ov.querySelector("#x-info");
+  const refresh = () => {
+    const y = +ov.querySelector("#x-year").value, q = +ov.querySelector("#x-q").value;
+    const ms = quarterMonths(y, q);
+    info.innerHTML = `제목: <b>${esc(ov.querySelector("#x-company").value)} ${y}년 ${q}분기 임대현황</b><br>
+      시트1 · 임대현황: 전체 건물 (공실 포함)<br>시트2 · 입금내역: ${ms[0]} ~ ${ms[2]}`;
+  };
+  ov.querySelector("#x-year").onchange = refresh;
+  ov.querySelector("#x-q").onchange = refresh;
+  ov.querySelector("#x-company").oninput = refresh;
+  refresh();
+
+  ov.querySelector("#c").onclick = () => ov.remove();
+  ov.querySelector("#s").onclick = async () => {
+    const company = ov.querySelector("#x-company").value.trim() || "회사";
+    const y = +ov.querySelector("#x-year").value, q = +ov.querySelector("#x-q").value;
+    localStorage.setItem("excelCompanyName", company);
+    try {
+      const bytes = buildExcel(data, y, q, company);
+      const ok = await window.api.exportExcel(Array.from(bytes), `${company} ${y}년 ${q}분기 임대현황.xlsx`);
+      if (ok) ov.remove();
+    } catch (err) {
+      alert("엑셀 파일을 만들지 못했습니다.\n" + err.message);
+    }
+  };
+}
+
 // ===== 백업 / 이동 =====
 function openBackup() {
   const ov = modal("백업 / 다른 컴퓨터로 이동",
-    `<div class="muted">모든 데이터(건물·호실·입금내역·세금계산서 기록·퇴실 보관함)를 파일 하나(.json)로 내보내고,
-     다른 컴퓨터(윈도우·맥 어느 쪽이든)의 RentDesk에서 「백업 불러오기」로 그대로 이어서 쓸 수 있습니다.<br><br>
-     ※ 첨부파일(사업자등록증·계약서)은 백업에 포함되지 않으니 필요하면 따로 옮겨주세요.<br>
+    `<div class="muted">모든 데이터(건물·호실·입금내역·세금계산서 기록·퇴실 보관함)와 <b>첨부파일(사업자등록증·계약서)</b>을
+     파일 하나(.zip)로 내보내고, 다른 컴퓨터(윈도우·맥 어느 쪽이든)의 RentDesk에서 「백업 불러오기」로 그대로 복원할 수 있습니다.<br><br>
      ※ 프로그램을 새 버전으로 재설치해도 데이터는 지워지지 않지만, 만약을 위해 업데이트 전 백업을 권장합니다.</div>`,
     `<button id="exp" class="accent">백업 내보내기</button><button id="imp">백업 불러오기</button><span style="flex:1"></span><button id="c">닫기</button>`);
   ov.querySelector("#c").onclick = () => ov.remove();
   ov.querySelector("#exp").onclick = async () => {
-    const ok = await window.api.exportBackup(JSON.stringify(data, null, 2), `RentDesk-백업_${todayYmd()}.json`);
-    if (ok) { alert("백업을 내보냈습니다."); ov.remove(); }
+    // 첨부 경로는 파일명만 남겨 저장 (다른 컴퓨터에서도 찾을 수 있게)
+    const snapshot = JSON.parse(JSON.stringify(data));
+    const attachPaths = [];
+    for (const b of snapshot.buildings) {
+      for (const u of b.units) {
+        for (const k of ["businessCert", "contract"]) {
+          if (u[k]) { attachPaths.push(u[k]); u[k] = u[k].split(/[\\/]/).pop(); }
+        }
+      }
+    }
+    const ok = await window.api.exportBackup(JSON.stringify(snapshot, null, 2), `RentDesk-백업_${todayYmd()}.zip`, attachPaths);
+    if (ok) { alert("데이터와 첨부파일을 모두 백업했습니다."); ov.remove(); }
   };
   ov.querySelector("#imp").onclick = async () => {
-    const raw = await window.api.importBackup();
-    if (!raw) return;
+    const res = await window.api.importBackup();
+    if (!res) return;
     let parsed;
-    try { parsed = JSON.parse(raw.replace(/^﻿/, "")); } catch { return alert("RentDesk 백업 파일이 아니거나 읽을 수 없습니다."); }
+    try { parsed = JSON.parse(String(res.json).replace(/^﻿/, "")); } catch { return alert("RentDesk 백업 파일이 아니거나 읽을 수 없습니다."); }
     if (!Array.isArray(parsed.buildings)) return alert("RentDesk 백업 파일이 아닙니다.");
+    // 복원된 첨부파일 경로 다시 연결
+    const restored = res.restored || {};
+    for (const b of parsed.buildings) {
+      for (const u of b.units || []) {
+        for (const k of ["businessCert", "contract"]) {
+          if (!u[k]) continue;
+          const base = String(u[k]).split(/[\\/]/).pop();
+          if (restored[base]) u[k] = restored[base];
+        }
+      }
+    }
     if (!confirm("현재 이 컴퓨터의 데이터가 백업 파일 내용으로 전부 교체됩니다.\n계속할까요?")) return;
     data = parsed;
     data.buildings ||= []; data.moveOuts ||= []; data.taxIssued ||= [];
@@ -653,10 +789,10 @@ function openBackup() {
 
 // ===== CSV =====
 function exportCSV() {
-  const head = ["건물명", "층", "호실", "상태", "임차인", "입금은행", "세금계산서발행일", "계약시작일", "계약종료일", "보증금", "월세", "관리비방식", "관리비", "관리비짝수달", "입금월", "입금예정액", "실입금액", "실입금일", "당월미납", "메모"];
+  const head = ["건물명", "층", "호실", "상태", "임차인", "대표자", "연락처", "사업자등록번호", "입금은행", "세금계산서발행일", "계약시작일", "계약종료일", "보증금", "월세", "관리비", "공용요금(홀)", "공용요금(짝)", "입금월", "입금예정액", "실입금액", "실입금일", "당월미납", "메모"];
   const lines = [head];
   for (const b of data.buildings) for (const u of b.units) {
-    const base = [b.name, u.floor, u.unit, u.status, u.tenant, u.bank || "", u.taxDay > 0 ? `매달 ${u.taxDay}일` : "", ymdOf(u.startDate), ymdOf(u.endDate), u.deposit, u.rent, u.maintMode, u.maintenance, u.maintEven];
+    const base = [b.name, u.floor, u.unit, u.status, u.tenant, u.owner || "", u.phone || "", u.bizNo || "", u.bank || "", u.taxDay > 0 ? `매달 ${u.taxDay}일` : "", ymdOf(u.startDate), ymdOf(u.endDate), u.deposit, u.rent, u.maintenance, u.commonOdd || 0, u.commonEven || 0];
     if (!u.payments.length) lines.push(base.concat(["", "", "", "", "", ""]));
     else for (const p of u.payments) lines.push(base.concat([p.period, p.due, p.paid, ymdOf(p.paidDate), (p.due || 0) - (p.paid || 0), p.memo || ""]));
   }
@@ -672,6 +808,7 @@ document.getElementById("btnMoveOut").onclick = openMoveOut;
 document.getElementById("btnTax").onclick = openTaxMonth;
 document.getElementById("btnArchive").onclick = openArchive;
 document.getElementById("btnCsv").onclick = exportCSV;
+document.getElementById("btnExcel").onclick = openExcelExport;
 document.getElementById("btnBackup").onclick = openBackup;
 
 // ===== 창 크기 드래그 조절 =====
