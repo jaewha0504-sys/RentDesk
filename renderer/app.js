@@ -6,7 +6,20 @@ let selBuildingId = null, selUnitId = null;
 let selPayments = new Set(), anchorPayment = null;
 let saveTimer = null;
 
-const OCC = "임대중", VAC = "공실", SAME = "짝/홀수달 동일", DIFF = "짝/홀수달 상이";
+const OCC = "임대중", VAC = "공실", MRG = "통합됨", SAME = "짝/홀수달 동일", DIFF = "짝/홀수달 상이";
+
+// ===== 통임대 (여러 호실을 한 임차인이 사용) =====
+function mergedChildren(b, hostId) { return b.units.filter((x) => x.status === MRG && x.mergedInto === hostId); }
+function unitName(u) { return [u.floor, u.unit].filter(Boolean).join(" ") || "(호실)"; }
+function findUnitById(b, id) { return b.units.find((x) => x.id === id) || null; }
+function mergeUnit(b, childId, hostId) {
+  const child = findUnitById(b, childId), host = findUnitById(b, hostId);
+  if (!child || !host || child.id === host.id) return;
+  releaseMergedChildren(b, child.id);          // 대표였던 호실이면 자식 먼저 해제
+  Object.assign(child, { status: MRG, mergedInto: host.id, tenant: "", owner: null, phone: null, bizNo: null, bank: "", taxDay: 0, startDate: null, endDate: null, deposit: 0, rent: 0, maintenance: 0, commonOdd: null, commonEven: null, payments: [] });
+}
+function unmergeUnit(b, id) { const u = findUnitById(b, id); if (u) { u.status = VAC; u.mergedInto = null; } }
+function releaseMergedChildren(b, hostId) { mergedChildren(b, hostId).forEach((c) => { c.status = VAC; c.mergedInto = null; }); }
 
 // ===== 유틸 =====
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : "id-" + Date.now() + "-" + Math.random().toString(16).slice(2));
@@ -133,7 +146,7 @@ function seed() {
     const base = withVAT(rent + maint);
     return months.map((m, i) => { const unpaid = i >= months.length - unpaidN; return { id: uid(), period: m, due: base, paid: unpaid ? 0 : base, paidDate: unpaid ? null : isoOf(m + "-05"), memo: "" }; });
   };
-  const U = (o) => Object.assign({ id: uid(), floor: "", unit: "", status: OCC, tenant: "", owner: null, phone: null, bizNo: null, taxDay: 0, bank: "", startDate: null, endDate: null, deposit: 0, rent: 0, maintMode: SAME, maintenance: 0, maintEven: 0, memo: "", businessCert: null, contract: null, payments: [] }, o);
+  const U = (o) => Object.assign({ id: uid(), floor: "", unit: "", status: OCC, mergedInto: null, tenant: "", owner: null, phone: null, bizNo: null, taxDay: 0, bank: "", startDate: null, endDate: null, deposit: 0, rent: 0, maintMode: SAME, maintenance: 0, maintEven: 0, memo: "", businessCert: null, contract: null, payments: [] }, o);
   data.buildings = [
     { id: uid(), name: "강남 본사빌딩", address: "서울시 강남구", memo: "", units: [
       U({ floor: "3층", unit: "301호", tenant: "(주)미래상사", taxDay: 1, bank: "국민은행", startDate: isoOf("2024-03-01"), endDate: isoOf("2026-02-28"), deposit: 50000000, rent: 3000000, maintenance: 400000, payments: pays(3000000, 400000, 0) }),
@@ -181,9 +194,21 @@ function renderUnits() {
     const up = unpaidTotal(u);
     const li = document.createElement("li");
     li.className = "row" + (u.status === VAC ? " vac" : "") + (u.id === selUnitId ? " sel" : "");
-    const nm = [u.floor, u.unit].filter(Boolean).join(" ") || "(호실)";
-    let right = u.status === VAC ? '<span class="badge">공실</span>' : (up > 0 ? `<span class="unpaid">미납 ${won(up)}</span>` : "");
-    li.innerHTML = `<span class="right">${right}</span><div class="name">${esc(nm)}</div><div class="sub">${u.status === VAC ? "공실" : esc(u.tenant || "임차인 미입력")}</div>`;
+    const nm = unitName(u);
+    let right = u.status === VAC ? '<span class="badge">공실</span>'
+      : u.status === MRG ? '<span class="badge">통임대</span>'
+      : (up > 0 ? `<span class="unpaid">미납 ${won(up)}</span>` : "");
+    let sub;
+    if (u.status === MRG) {
+      const host = u.mergedInto ? findUnitById(b, u.mergedInto) : null;
+      sub = host ? `${unitName(host)}에 포함` : "통임대 (대표 호실 없음)";
+    } else if (u.status === VAC) {
+      sub = "공실";
+    } else {
+      const kids = mergedChildren(b, u.id);
+      sub = (u.tenant || "임차인 미입력") + (kids.length ? ` · ${kids.map(unitName).join(", ")} 포함` : "");
+    }
+    li.innerHTML = `<span class="right">${right}</span><div class="name">${esc(nm)}</div><div class="sub">${esc(sub)}</div>`;
     li.onclick = () => { selUnitId = u.id; selPayments.clear(); renderDetail(); markUnitSel(); };
     ul.appendChild(li);
   });
@@ -215,14 +240,20 @@ function renderDetail() {
   const b = building(), u = unit();
   if (!u) { host.innerHTML = `<div class="vacant-note">호실을 선택하세요</div>`; return; }
   const head = `<div class="det-head">
-      <div><div class="bn">${esc(b.name)}</div><div class="rn">${esc([u.floor, u.unit].filter(Boolean).join(" ") || "(호실)")}</div></div>
-      <span class="statusbadge ${u.status === VAC ? "vac" : "occ"}">${u.status}</span>
+      <div><div class="bn">${esc(b.name)}</div><div class="rn">${esc(unitName(u))}${mergedChildren(b, u.id).map((c) => ` <span class="muted">+ ${esc(c.unit || unitName(c))}</span>`).join("")}</div></div>
+      <span class="statusbadge ${u.status === VAC ? "vac" : "occ"}">${u.status === MRG ? "통임대" : u.status}</span>
       <span class="sp"></span>
       <button id="btnBiz">${u.businessCert ? "✓ 사업자등록증" : "📎 사업자등록증"}</button>
       <button id="btnContract">${u.contract ? "✓ 계약서" : "📎 계약서"}</button>
       <button id="btnEditUnit" class="accent">정보 수정</button>
     </div>`;
-  if (u.status === VAC) {
+  if (u.status === MRG) {
+    const h = u.mergedInto ? findUnitById(b, u.mergedInto) : null;
+    host.innerHTML = head + `<div class="vacant-note">이 호실은 ${esc(h ? unitName(h) : "다른 호실")}에 포함된 통임대 호실입니다.<br>계약·입금내역은 대표 호실에서 관리합니다.
+      ${h ? `<br><br><button id="btnGotoHost">대표 호실(${esc(unitName(h))}) 보기</button>` : ""}</div>`;
+    const gh = document.getElementById("btnGotoHost");
+    if (gh) gh.onclick = () => { selUnitId = h.id; selPayments.clear(); renderAll(); };
+  } else if (u.status === VAC) {
     host.innerHTML = head + `<div class="vacant-note">이 호실은 현재 공실입니다.<br>‘정보 수정’에서 임대중으로 바꾸면 정보·입금내역이 표시됩니다.</div>`;
   } else {
     const row = (lab, val) => `<div class="inforow"><span class="lab">${lab}</span><span class="val">${val}</span></div>`;
@@ -543,15 +574,25 @@ function openAddRoom() {
     let unitv = single.checked ? "" : unitIn.value.trim();
     if (unitv && /^[0-9]+$/.test(unitv)) unitv += "호";
     if (!floor && !unitv) return alert("층 또는 호실을 입력하세요.");
-    const nu = { id: uid(), floor, unit: unitv, status: OCC, tenant: "", owner: null, phone: null, bizNo: null, taxDay: 0, bank: "", startDate: null, endDate: null, deposit: 0, rent: 0, maintMode: SAME, maintenance: 0, maintEven: 0, memo: "", businessCert: null, contract: null, payments: [] };
+    const nu = { id: uid(), floor, unit: unitv, status: OCC, mergedInto: null, tenant: "", owner: null, phone: null, bizNo: null, taxDay: 0, bank: "", startDate: null, endDate: null, deposit: 0, rent: 0, maintMode: SAME, maintenance: 0, maintEven: 0, memo: "", businessCert: null, contract: null, payments: [] };
     building().units.push(nu); selUnitId = nu.id; save(); ov.remove(); renderAll();
   };
 }
 
 function openUnitEditor(u) {
+  const bld = building();
+  const kids = mergedChildren(bld, u.id);
+  const cands = bld.units.filter((x) => x.id !== u.id && x.status !== MRG);
+  const statusBlock = u.status === MRG
+    ? `<div class="field"><label>공실 여부</label><input value="통임대 — ${esc(u.mergedInto && findUnitById(bld, u.mergedInto) ? unitName(findUnitById(bld, u.mergedInto)) + "에 포함" : "대표 호실 없음")}" disabled></div>
+       <div class="field"><button id="e-unmerge">통임대 해제 (공실로)</button></div>`
+    : `<div class="field"><label>공실 여부</label><select id="e-status"><option ${u.status === OCC ? "selected" : ""}>${OCC}</option><option ${u.status === VAC ? "selected" : ""}>${VAC}</option></select></div>
+       <div class="field"><label>통임대로 묶기</label><select id="e-merge"><option value="">사용 안 함</option>${cands.map((c) => `<option value="${c.id}">${esc(unitName(c))}에 포함시키기</option>`).join("")}</select>
+         <div class="muted">한 임차인이 여러 호실을 함께 쓸 때 사용합니다. 묶은 호실은 공실·미납 통계에서 빠지고, 엑셀에서는 대표 호실과 병합되어 표시됩니다.</div></div>
+       ${kids.length ? `<div class="field"><label>포함된 호실</label><input value="${esc(kids.map(unitName).join(", "))}" disabled></div>` : ""}`;
   const ov = modal(`호실 정보 수정 — ${[u.floor, u.unit].filter(Boolean).join(" ")}`,
-    `<div class="field"><label>공실 여부</label><select id="e-status"><option ${u.status === OCC ? "selected" : ""}>${OCC}</option><option ${u.status === VAC ? "selected" : ""}>${VAC}</option></select></div>
-     <div class="field"><label>임차인</label><input id="e-tenant" value="${esc(u.tenant || "")}" placeholder="예: (주)○○상사"></div>
+    statusBlock +
+    `<div class="field"><label>임차인</label><input id="e-tenant" value="${esc(u.tenant || "")}" placeholder="예: (주)○○상사"></div>
      <div class="frow"><div class="field"><label>대표자</label><input id="e-owner" value="${esc(u.owner || "")}" placeholder="예: 홍길동"></div>
        <div class="field"><label>연락처</label><input id="e-phone" value="${esc(u.phone || "")}" placeholder="숫자만 입력하면 자동 하이픈"></div></div>
      <div class="field"><label>사업자등록번호</label><input id="e-bizno" value="${esc(u.bizNo || "")}" placeholder="숫자만 입력하면 자동 하이픈"></div>
@@ -574,12 +615,23 @@ function openUnitEditor(u) {
   phoneIn.addEventListener("input", () => { phoneIn.value = formatPhone(phoneIn.value); });
   bizIn.addEventListener("input", () => { bizIn.value = formatBizNo(bizIn.value); });
   const status = ov.querySelector("#e-status"), useCommon = ov.querySelector("#e-usecommon");
+  const mergeSel = ov.querySelector("#e-merge"), unmergeBtn = ov.querySelector("#e-unmerge");
   const lockFields = ["e-tenant", "e-owner", "e-phone", "e-bizno", "e-tax", "e-bank", "e-start", "e-end", "e-deposit"];
-  const applyStatus = () => { const occ = status.value === OCC; lockFields.forEach((id) => ov.querySelector("#" + id).disabled = !occ); };
+  const applyStatus = () => {
+    const occ = status ? status.value === OCC : false;
+    const locked = !occ || (mergeSel && mergeSel.value);
+    lockFields.forEach((id) => ov.querySelector("#" + id).disabled = !!locked);
+  };
   const applyCommon = () => { ov.querySelector("#wrap-common").style.display = useCommon.checked ? "" : "none"; };
-  status.onchange = applyStatus; useCommon.onchange = applyCommon; applyStatus(); applyCommon();
+  if (status) status.onchange = applyStatus;
+  if (mergeSel) mergeSel.onchange = applyStatus;
+  useCommon.onchange = applyCommon; applyStatus(); applyCommon();
+  if (unmergeBtn) unmergeBtn.onclick = () => { unmergeUnit(bld, u.id); save(); ov.remove(); renderAll(); };
   ov.querySelector("#c").onclick = () => ov.remove();
   ov.querySelector("#s").onclick = () => {
+    if (mergeSel && mergeSel.value) { mergeUnit(bld, u.id, mergeSel.value); save(); ov.remove(); renderAll(); return; }
+    if (u.status === MRG) { ov.remove(); return; }
+    if (status.value === VAC) releaseMergedChildren(bld, u.id);
     u.status = status.value; u.tenant = ov.querySelector("#e-tenant").value.trim();
     u.owner = ov.querySelector("#e-owner").value.trim() || null;
     u.phone = phoneIn.value.trim() || null;
@@ -611,6 +663,7 @@ function openMoveOut() {
   ov.querySelector("#s").onclick = () => {
     const td = u.payments.reduce((s, p) => s + (p.due || 0), 0), tp = u.payments.reduce((s, p) => s + (p.paid || 0), 0);
     data.moveOuts.unshift({ id: uid(), buildingName: b.name, floor: u.floor, unit: u.unit, tenant: u.tenant, owner: u.owner, phone: u.phone, bizNo: u.bizNo, bank: u.bank, taxDay: u.taxDay, startDate: u.startDate, endDate: u.endDate, deposit: u.deposit, rent: u.rent, maintenance: u.maintenance, maintMode: u.maintMode, maintEven: u.maintEven, commonOdd: u.commonOdd, commonEven: u.commonEven, totalDue: td, totalPaid: tp, unpaid: td - tp, moveOutDate: isoOf(ov.querySelector("#e-date").value), memo: ov.querySelector("#e-memo").value.trim(), archivedAt: isoOf(todayYmd()), payments: u.payments });
+    releaseMergedChildren(b, u.id);
     Object.assign(u, { status: VAC, tenant: "", owner: null, phone: null, bizNo: null, bank: "", taxDay: 0, startDate: null, endDate: null, deposit: 0, payments: [] });
     save(); ov.remove(); renderAll();
   };
@@ -803,7 +856,7 @@ function exportCSV() {
 // ===== 시작 =====
 document.getElementById("btnAddBuilding").onclick = () => openBuildingEditor(null);
 document.getElementById("btnAddUnit").onclick = openAddRoom;
-document.getElementById("btnDelUnit").onclick = () => { const u = unit(); if (!u) return alert("호실을 선택하세요."); if (confirm(`「${[u.floor, u.unit].filter(Boolean).join(" ")}」 호실을 삭제할까요?`)) { building().units = building().units.filter((x) => x.id !== u.id); selUnitId = building().units[0]?.id || null; save(); renderAll(); } };
+document.getElementById("btnDelUnit").onclick = () => { const u = unit(); if (!u) return alert("호실을 선택하세요."); if (confirm(`「${[u.floor, u.unit].filter(Boolean).join(" ")}」 호실을 삭제할까요?`)) { releaseMergedChildren(building(), u.id); building().units = building().units.filter((x) => x.id !== u.id); selUnitId = building().units[0]?.id || null; save(); renderAll(); } };
 document.getElementById("btnMoveOut").onclick = openMoveOut;
 document.getElementById("btnTax").onclick = openTaxMonth;
 document.getElementById("btnArchive").onclick = openArchive;

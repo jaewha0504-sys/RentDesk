@@ -37,6 +37,21 @@ function sortedUnitsOf(b) {
 }
 const roomName = (u) => [u.floor, u.unit].filter(Boolean).join(" ") || "(호실)";
 
+// 통임대 호실을 대표 호실 바로 뒤로 옮겨 세로 병합이 가능하게 재배열
+function arrangeMerged(units) {
+  const out = [], used = new Set();
+  for (const u of units) {
+    if (u.status === MRG) continue;
+    out.push(u); used.add(u.id);
+    for (const c of units) {
+      if (c.status === MRG && c.mergedInto === u.id) { out.push(c); used.add(c.id); }
+    }
+  }
+  // 대표 호실이 사라진 고아 통임대 호실은 뒤에 그대로 붙임
+  for (const u of units) if (!used.has(u.id)) out.push(u);
+  return out;
+}
+
 // ---- 시트1: 임대현황 ----
 function buildStatusSheet(data, year, quarter, companyName) {
   const rows = [], merges = [];
@@ -55,7 +70,10 @@ function buildStatusSheet(data, year, quarter, companyName) {
       "보증금", "월세(원)", "월세 부가세(원)", "관리비(원)", "부가세(원)", "합계", "공용요금", "비고"];
     rows.push({ cells: headers.map((t, i) => T(t, i === 0 ? XS.buildingHdr : XS.header)) });
 
-    for (const u of sortedUnitsOf(b)) {
+    const ordered = arrangeMerged(sortedUnitsOf(b));
+    let i = 0;
+    while (i < ordered.length) {
+      const u = ordered[i];
       const rowIndex = rows.length + 1;
       if (u.status === VAC) {
         const cells = Array.from({ length: colCount }, () => E(XS.vacant));
@@ -64,17 +82,38 @@ function buildStatusSheet(data, year, quarter, companyName) {
         cells[colCount - 1] = E(XS.textC);
         rows.push({ cells });
         merges.push(`B${rowIndex}:${colLetter(colCount - 1)}${rowIndex}`);
-      } else {
-        const total = withVAT(u.rent || 0) + withVAT(u.maintenance || 0);
-        const commonTxt = hasCommon(u) ? `${manwon(u.commonOdd || 0)}/${manwon(u.commonEven || 0)}` : "";
-        rows.push({ cells: [
-          T(roomName(u)), T(u.tenant || ""), T(u.owner || ""), T(u.phone || ""),
-          T(u.taxDay > 0 ? `${u.taxDay}일` : "", XS.dateC), T(u.bizNo || ""),
-          N(u.deposit), N(u.rent), N(vatOnly(u.rent || 0)),
-          N(u.maintenance), N(vatOnly(u.maintenance || 0)), N(total),
-          T(commonTxt), E(XS.textC),
-        ]});
+        i += 1;
+        continue;
       }
+      const total = withVAT(u.rent || 0) + withVAT(u.maintenance || 0);
+      const commonTxt = hasCommon(u) ? `${manwon(u.commonOdd || 0)}/${manwon(u.commonEven || 0)}` : "";
+      rows.push({ cells: [
+        T(roomName(u)), T(u.tenant || ""), T(u.owner || ""), T(u.phone || ""),
+        T(u.taxDay > 0 ? `${u.taxDay}일` : "", XS.dateC), T(u.bizNo || ""),
+        N(u.deposit), N(u.rent), N(vatOnly(u.rent || 0)),
+        N(u.maintenance), N(vatOnly(u.maintenance || 0)), N(total),
+        T(commonTxt), E(XS.textC),
+      ]});
+
+      // 이 호실에 묶인 통임대 호실 — 호실명만 쓰고 나머지 열은 대표 행과 세로 병합
+      const childNames = [];
+      let j = i + 1;
+      while (j < ordered.length && ordered[j].status === MRG && ordered[j].mergedInto === u.id) {
+        childNames.push(roomName(ordered[j]));
+        j += 1;
+      }
+      if (childNames.length) {
+        const names = childNames.concat([roomName(u)]).sort();
+        rows[rows.length - 1].cells[0] = T(names[0]);
+        for (const name of names.slice(1)) {
+          const cells = Array.from({ length: colCount }, () => E(XS.textC));
+          cells[0] = T(name);
+          rows.push({ cells });
+        }
+        const lastRow = rows.length;
+        for (let c = 2; c <= colCount; c++) merges.push(`${colLetter(c)}${rowIndex}:${colLetter(c)}${lastRow}`);
+      }
+      i = j;
     }
     rows.push({ cells: [] });
   }
