@@ -840,19 +840,6 @@ function openBackup() {
   };
 }
 
-// ===== CSV =====
-function exportCSV() {
-  const head = ["건물명", "층", "호실", "상태", "임차인", "대표자", "연락처", "사업자등록번호", "입금은행", "세금계산서발행일", "계약시작일", "계약종료일", "보증금", "월세", "관리비", "공용요금(홀)", "공용요금(짝)", "입금월", "입금예정액", "실입금액", "실입금일", "당월미납", "메모"];
-  const lines = [head];
-  for (const b of data.buildings) for (const u of b.units) {
-    const base = [b.name, u.floor, u.unit, u.status, u.tenant, u.owner || "", u.phone || "", u.bizNo || "", u.bank || "", u.taxDay > 0 ? `매달 ${u.taxDay}일` : "", ymdOf(u.startDate), ymdOf(u.endDate), u.deposit, u.rent, u.maintenance, u.commonOdd || 0, u.commonEven || 0];
-    if (!u.payments.length) lines.push(base.concat(["", "", "", "", "", ""]));
-    else for (const p of u.payments) lines.push(base.concat([p.period, p.due, p.paid, ymdOf(p.paidDate), (p.due || 0) - (p.paid || 0), p.memo || ""]));
-  }
-  const csv = lines.map((r) => r.map((f) => { const s = String(f ?? ""); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }).join(",")).join("\r\n");
-  window.api.exportCsv(csv, `RentDesk_${todayYmd()}.csv`);
-}
-
 // ===== 시작 =====
 document.getElementById("btnAddBuilding").onclick = () => openBuildingEditor(null);
 document.getElementById("btnAddUnit").onclick = openAddRoom;
@@ -860,7 +847,6 @@ document.getElementById("btnDelUnit").onclick = () => { const u = unit(); if (!u
 document.getElementById("btnMoveOut").onclick = openMoveOut;
 document.getElementById("btnTax").onclick = openTaxMonth;
 document.getElementById("btnArchive").onclick = openArchive;
-document.getElementById("btnCsv").onclick = exportCSV;
 document.getElementById("btnExcel").onclick = openExcelExport;
 document.getElementById("btnBackup").onclick = openBackup;
 
