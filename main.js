@@ -16,15 +16,65 @@ function attachmentsDir() {
   return dir;
 }
 
+// 메뉴 종료·업데이트 재시작처럼 이미 확정된 종료인지
+let quitting = false;
+app.on("before-quit", () => { quitting = true; });
+
+// ---- 창 크기·위치 기억 ----
+function boundsFile() { return path.join(dataDir(), "window.json"); }
+function loadBounds() {
+  try {
+    const b = JSON.parse(fs.readFileSync(boundsFile(), "utf8"));
+    if (b && b.width > 400 && b.height > 300) return b;
+  } catch {}
+  return null;
+}
+function saveBounds(win) {
+  try {
+    if (!win || win.isDestroyed() || win.isMinimized()) return;
+    // 최대화 상태에서는 원래 크기를 남겨둔다
+    const b = win.isMaximized() ? win.getNormalBounds() : win.getBounds();
+    fs.writeFileSync(boundsFile(), JSON.stringify({ ...b, maximized: win.isMaximized() }), "utf8");
+  } catch {}
+}
+
 function createWindow() {
+  const saved = loadBounds();
   const win = new BrowserWindow({
-    width: 1360,
-    height: 900,
+    width: saved ? saved.width : 1360,
+    height: saved ? saved.height : 900,
+    ...(saved && Number.isInteger(saved.x) ? { x: saved.x, y: saved.y } : {}),
     minWidth: 1100,
     minHeight: 680,
     title: "RentDesk",
     webPreferences: { preload: path.join(__dirname, "preload.js") },
   });
+  if (saved && saved.maximized) win.maximize();
+
+  let saveTimer = null;
+  const remember = () => { clearTimeout(saveTimer); saveTimer = setTimeout(() => saveBounds(win), 300); };
+  win.on("resize", remember);
+  win.on("move", remember);
+
+  // ---- 종료 확인 (실수로 X를 눌렀을 때) ----
+  let closeConfirmed = false;
+  win.on("close", (e) => {
+    // 메뉴 종료·업데이트 재시작 등은 이미 의도한 종료이므로 다시 묻지 않는다
+    if (closeConfirmed || quitting) { saveBounds(win); return; }
+    e.preventDefault();
+    saveBounds(win);
+    dialog.showMessageBox(win, {
+      type: "question",
+      buttons: ["종료", "취소"],
+      defaultId: 0,
+      cancelId: 1,
+      message: "RentDesk를 종료할까요?",
+      detail: "입력한 내용은 자동으로 저장되어 있습니다.",
+    }).then((r) => {
+      if (r.response === 0) { closeConfirmed = true; win.close(); }
+    });
+  });
+
   win.loadFile(path.join(__dirname, "renderer", "index.html"));
 }
 
@@ -83,12 +133,6 @@ ipcMain.handle("attach", async (_e, { unitId, kind }) => {
 });
 ipcMain.handle("openFile", (_e, p) => { if (p) shell.openPath(p); });
 ipcMain.handle("removeFile", (_e, p) => { try { if (p) fs.unlinkSync(p); } catch {} });
-ipcMain.handle("exportCsv", async (_e, { text, name }) => {
-  const res = await dialog.showSaveDialog({ defaultPath: name, filters: [{ name: "CSV", extensions: ["csv"] }] });
-  if (res.canceled || !res.filePath) return false;
-  fs.writeFileSync(res.filePath, "﻿" + text, "utf8");
-  return true;
-});
 ipcMain.handle("saveAttachmentCopy", async (_e, srcPath) => {
   const res = await dialog.showSaveDialog({ defaultPath: path.basename(srcPath) });
   if (res.canceled || !res.filePath) return false;

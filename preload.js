@@ -6,7 +6,6 @@ contextBridge.exposeInMainWorld("api", {
   attach: (unitId, kind) => ipcRenderer.invoke("attach", { unitId, kind }),
   openFile: (p) => ipcRenderer.invoke("openFile", p),
   removeFile: (p) => ipcRenderer.invoke("removeFile", p),
-  exportCsv: (text, name) => ipcRenderer.invoke("exportCsv", { text, name }),
   saveAttachmentCopy: (p) => ipcRenderer.invoke("saveAttachmentCopy", p),
   exportExcel: (bytes, name) => ipcRenderer.invoke("exportExcel", { bytes, name }),
   exportBackup: (text, name, attachPaths) => ipcRenderer.invoke("exportBackup", { text, name, attachPaths }),
