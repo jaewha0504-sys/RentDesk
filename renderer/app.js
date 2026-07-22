@@ -849,6 +849,7 @@ document.getElementById("btnTax").onclick = openTaxMonth;
 document.getElementById("btnArchive").onclick = openArchive;
 document.getElementById("btnExcel").onclick = openExcelExport;
 document.getElementById("btnBackup").onclick = openBackup;
+document.getElementById("btnUpdate").onclick = () => window.api.checkUpdates();
 
 // ===== 창 크기 드래그 조절 =====
 function setupResizers() {
