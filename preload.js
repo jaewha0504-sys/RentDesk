@@ -5,6 +5,8 @@ contextBridge.exposeInMainWorld("api", {
   save: (text) => ipcRenderer.invoke("save", text),
   attach: (unitId, kind) => ipcRenderer.invoke("attach", { unitId, kind }),
   openFile: (p) => ipcRenderer.invoke("openFile", p),
+  checkUpdates: () => ipcRenderer.invoke("checkUpdates"),
+  appVersion: () => ipcRenderer.invoke("appVersion"),
   removeFile: (p) => ipcRenderer.invoke("removeFile", p),
   saveAttachmentCopy: (p) => ipcRenderer.invoke("saveAttachmentCopy", p),
   exportExcel: (bytes, name) => ipcRenderer.invoke("exportExcel", { bytes, name }),

@@ -89,6 +89,18 @@ function updLog(...parts) {
   } catch {}
 }
 
+// "업데이트 확인" 메뉴에서 호출 — 사용자가 직접 눌렀을 때만 결과를 알려준다
+let checkUpdatesNow = () => {
+  dialog.showMessageBox({
+    type: "info",
+    buttons: ["다운로드 페이지 열기", "닫기"],
+    defaultId: 0,
+    cancelId: 1,
+    message: "자동 업데이트를 사용할 수 없습니다",
+    detail: "개발 중 실행이거나 업데이트 기능이 준비되지 않았습니다.\n다운로드 페이지에서 직접 받으실 수 있습니다.",
+  }).then((r) => { if (r.response === 0) shell.openExternal(RELEASES_URL); });
+};
+
 function setupAutoUpdate() {
   if (!app.isPackaged) return;   // 개발 실행 중에는 건너뜀
   let autoUpdater;
@@ -116,34 +128,42 @@ function setupAutoUpdate() {
     }).then((r) => { if (r.response === 0) shell.openExternal(RELEASES_URL); });
   };
 
+  // 내려받은 설치 파일을 직접 실행한다.
+  // electron-updater의 quitAndInstall()은 설치 프로그램을 내부적으로 띄우는데,
+  // 그 과정이 조용히 실패하는 경우가 있어(백신·SmartScreen 등) 사용자가 파일을
+  // 더블클릭하는 것과 동일한 방식(shell.openPath)으로 연다.
+  const runInstaller = (file) => {
+    if (!file || !fs.existsSync(file)) {
+      updLog("설치 파일을 찾을 수 없음", String(file));
+      manualFallback("내려받은 설치 파일을 찾지 못했습니다.");
+      return;
+    }
+    updLog("설치 파일 실행", file);
+    quitting = true;                       // 종료 확인창이 다시 뜨지 않게
+    shell.openPath(file).then((err) => {
+      if (err) {                           // 빈 문자열이면 성공
+        updLog("설치 파일 실행 실패", err);
+        quitting = false;
+        manualFallback(`설치 프로그램을 실행하지 못했습니다.\n(${err})`);
+        return;
+      }
+      // 설치 프로그램이 파일을 교체하려면 앱이 꺼져 있어야 한다
+      updLog("설치 프로그램 실행됨 — 앱 종료");
+      setTimeout(() => app.quit(), 1500);
+    });
+  };
+
   autoUpdater.on("update-downloaded", (info) => {
-    updLog("다운로드 완료", info.version);
+    const file = info && info.downloadedFile;
+    updLog("다운로드 완료", info.version, "파일:", String(file));
     dialog.showMessageBox({
       type: "info",
-      buttons: ["지금 재시작", "나중에 (종료할 때 적용)"],
+      buttons: ["지금 설치", "나중에"],
       defaultId: 0,
+      cancelId: 1,
       message: "업데이트 준비 완료",
-      detail: `새 버전(v${info.version})을 내려받았습니다.\n재시작하면 적용됩니다. 데이터는 그대로 유지됩니다.`,
-    }).then((r) => {
-      if (r.response !== 0) return;
-      updLog("quitAndInstall 호출");
-      quitting = true;              // 종료 확인창이 다시 뜨지 않게
-      try {
-        autoUpdater.quitAndInstall();
-        // 설치 프로그램이 떴다면 앱은 곧 종료된다. 그대로 살아있으면 실패한 것.
-        setTimeout(() => {
-          if (app.isReady()) {
-            updLog("quitAndInstall 후에도 앱이 종료되지 않음 — 설치 실행 실패로 판단");
-            quitting = false;
-            manualFallback("설치 프로그램이 실행되지 않았습니다. 백신이나 Windows 보안 기능이 막았을 수 있습니다.");
-          }
-        }, 8000);
-      } catch (e) {
-        updLog("quitAndInstall 예외", String(e));
-        quitting = false;
-        manualFallback(String(e && e.message ? e.message : e));
-      }
-    });
+      detail: `새 버전(v${info.version})을 내려받았습니다.\n‘지금 설치’를 누르면 설치 프로그램이 열리고 RentDesk는 종료됩니다.\n설치가 끝나면 다시 실행해 주세요. 데이터는 그대로 유지됩니다.`,
+    }).then((r) => { if (r.response === 0) runInstaller(file); });
   });
 
   autoUpdater.on("error", (err) => {
@@ -156,8 +176,40 @@ function setupAutoUpdate() {
     }
   });
 
+  // ---- 메뉴에서 직접 확인할 때 ----
+  let manualCheck = false;
+  let downloaded = null;               // 이미 받아둔 설치 파일
+
+  autoUpdater.on("update-downloaded", (info) => { downloaded = info && info.downloadedFile; });
+  autoUpdater.on("update-not-available", (info) => {
+    updLog("최신 버전", app.getVersion());
+    if (!manualCheck) return;
+    manualCheck = false;
+    dialog.showMessageBox({
+      type: "info",
+      buttons: ["확인"],
+      message: "최신 버전입니다",
+      detail: `현재 v${app.getVersion()}을 사용 중이며, 더 새로운 버전은 없습니다.`,
+    });
+  });
+
+  checkUpdatesNow = () => {
+    // 이미 받아둔 게 있으면 바로 설치로
+    if (downloaded && fs.existsSync(downloaded)) { runInstaller(downloaded); return; }
+    manualCheck = true;
+    updLog("사용자가 업데이트 확인 요청");
+    autoUpdater.checkForUpdates().catch((e) => {
+      updLog("확인 실패", String(e));
+      manualCheck = false;
+      manualFallback(`업데이트 확인에 실패했습니다.\n(${e && e.message ? e.message : e})`);
+    });
+  };
+
   autoUpdater.checkForUpdates().catch((e) => updLog("확인 실패", String(e)));
 }
+
+ipcMain.handle("checkUpdates", () => { checkUpdatesNow(); });
+ipcMain.handle("appVersion", () => app.getVersion());
 
 app.whenReady().then(() => {
   createWindow();
