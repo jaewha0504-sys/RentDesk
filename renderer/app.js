@@ -45,6 +45,19 @@ function todayYmd() { const d = new Date(); return `${d.getFullYear()}-${String(
 function nowMonthKey() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; }
 function monthKeyOf(ymd) { return ymd ? ymd.slice(0, 7) : ""; }
 function startOfMonthYmd(ymd) { return ymd.slice(0, 7) + "-01"; }
+// 입금월 선택 후보 — 과거 3년 ~ 미래 2년. 현재 값이 범위 밖이면 그 값도 포함.
+function periodChoices(current) {
+  const d = new Date(), out = [];
+  for (let i = -36; i <= 24; i++) {
+    const t = new Date(d.getFullYear(), d.getMonth() + i, 1);
+    out.push(`${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}`);
+  }
+  if (current && !out.includes(current)) out.push(current);
+  return out.sort();
+}
+function periodOptions(current) {
+  return periodChoices(current).map((m) => `<option value="${m}"${m === current ? " selected" : ""}>${m}</option>`).join("");
+}
 function nextMonth(period) {
   const [y, m] = period.split("-").map(Number);
   let yy = y, mm = m + 1; if (mm === 13) { yy++; mm = 1; }
@@ -311,7 +324,7 @@ function ledgerHTML(u) {
       </tr>`;
     }
     return `<tr data-id="${p.id}" class="${cls}">
-      <td class="dragcell" title="드래그해서 행 순서 이동">${esc(p.period)}</td>
+      <td class="periodcell"><span class="draghandle" title="드래그해서 행 순서 이동">☰</span><select class="d-period">${periodOptions(p.period)}</select></td>
       <td><input class="num d-due" inputmode="numeric" value="${p.due ? won(p.due) : ""}"></td>
       <td><input class="num d-paid" inputmode="numeric" value="${p.paid ? won(p.paid) : ""}"></td>
       <td><input type="date" class="d-date" value="${ymdOf(p.paidDate)}"></td>
@@ -321,9 +334,8 @@ function ledgerHTML(u) {
     </tr>`;
   }).join("");
   return `<div class="ledger-head"><h2>월별 입금내역</h2><span class="muted">셀을 클릭해 바로 수정 · Ctrl/Shift로 복수선택</span><span class="sp"></span>
-      <button id="btnFill">빠진 달 채우기</button>
       <button id="btnDelPay" class="danger">행 삭제</button>
-      <button id="btnAddPay" class="accent">+ 입금내역 추가</button></div>
+      <button id="btnAddPay" class="accent" title="맨 아래에 행을 추가합니다. 입금월은 표에서 직접 고를 수 있습니다">+ 행 추가</button></div>
     <table class="ledger"><thead><tr>
       <th>입금월</th><th>입금예정액</th><th>실입금액</th><th>실입금일</th><th>당월미납</th><th>누적미납</th><th>메모</th>
     </tr></thead><tbody>${rows}</tbody></table>`;
@@ -345,7 +357,6 @@ function refreshComputed(u) {
 
 function wireLedger(u) {
   document.getElementById("btnAddPay").onclick = () => { addPaymentSmart(u); save(); renderDetail(); };
-  document.getElementById("btnFill").onclick = () => { fillMissing(u); save(); renderDetail(); };
   document.getElementById("btnDelPay").onclick = () => {
     if (!selPayments.size) return alert("삭제할 행을 선택하세요.");
     u.payments = u.payments.filter((p) => !selPayments.has(p.id)); selPayments.clear(); save(); renderDetail();
@@ -364,11 +375,18 @@ function wireLedger(u) {
     if (dateIn) dateIn.onchange = () => { p.paidDate = dateIn.value ? isoOf(dateIn.value) : null; save(); };
     const memoIn = tr.querySelector(".d-memo");
     if (memoIn) memoIn.onchange = () => { p.memo = memoIn.value; save(); };
+    // 입금월 직접 선택 — 기록이 없는 행이면 예정액도 그 달 기준으로 갱신
+    const perIn = tr.querySelector(".d-period");
+    if (perIn) perIn.onchange = () => {
+      p.period = perIn.value;
+      if ((p.paid || 0) === 0 && !(p.memo || "") && !p.paidDate) p.due = expectedVAT(u, p.period);
+      save(); renderDetail();
+    };
     // 드래그로 행 순서 이동 (입금월 칸이 손잡이) — 행 전체가 따라오고 다른 행은 밀려남
-    const dragCell = tr.querySelector(".dragcell");
+    const dragCell = tr.querySelector(".draghandle");
     if (dragCell) dragCell.onmousedown = (e) => startRowDrag(e, tr, u);
     tr.onclick = (e) => {
-      if (e.target.tagName === "INPUT") return;
+      if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
       if (e.shiftKey && anchorPayment) {
         const ids = u.payments.map((x) => x.id); const a = ids.indexOf(anchorPayment), bb = ids.indexOf(id);
         selPayments = new Set(ids.slice(Math.min(a, bb), Math.max(a, bb) + 1));
@@ -433,20 +451,14 @@ function startRowDrag(e, tr, u) {
   document.addEventListener("mouseup", onUp);
 }
 
-// 선택 행과 같은 달을 그 아래에 추가(분할입금). 선택 없으면 현재 달.
+// 맨 아래에 행 추가 — 마지막 행의 다음 달을 기본값으로. 입금월은 표에서 직접 고르면 된다.
 function addPaymentSmart(u) {
-  const ref = selPayments.size ? (anchorPayment || [...selPayments][0]) : null;
-  let period = nowMonthKey(), insertIndex = u.payments.length;
-  const refIdx = ref ? u.payments.findIndex((p) => p.id === ref) : -1;
-  if (refIdx >= 0 && !u.payments[refIdx].isOpening) {
-    period = u.payments[refIdx].period; insertIndex = refIdx + 1;
-  } else {
-    let li = -1; u.payments.forEach((p, i) => { if (p.period === period && !p.isOpening) li = i; });
-    if (li >= 0) insertIndex = li + 1;
-  }
+  const periods = u.payments.filter((p) => !p.isOpening).map((p) => p.period).sort();
+  const last = periods[periods.length - 1];
+  const period = last ? nextMonth(last) : nowMonthKey();
   const hasExisting = u.payments.some((p) => p.period === period && !p.isOpening);
   const due = hasExisting ? 0 : expectedVAT(u, period);
-  u.payments.splice(insertIndex, 0, { id: uid(), period, due, paid: 0, paidDate: null, memo: "" });
+  u.payments.push({ id: uid(), period, due, paid: 0, paidDate: null, memo: "" });
 }
 
 // "현재 달부터 입금 행 생성" — 첫 행에 과거 누적미납, 둘째 행부터 이번 달
@@ -458,16 +470,6 @@ function startLedgerFromNow(u) {
   u.payments.sort((a, b) => (a.period || "").localeCompare(b.period || ""));
 }
 
-function fillMissing(u) {
-  if (u.status !== OCC || !u.startDate) return;
-  const capYmd = (() => { const end = u.endDate ? ymdOf(u.endDate) : todayYmd(); return end < todayYmd() ? end : todayYmd(); })();
-  const months = monthsBetween(ymdOf(u.startDate), capYmd);
-  const existing = new Set(u.payments.map((p) => p.period));
-  const earliest = u.payments.filter((p) => !p.isOpening).map((p) => p.period).sort()[0];
-  let added = false;
-  for (const m of months) { if ((!earliest || m >= earliest) && !existing.has(m)) { u.payments.push({ id: uid(), period: m, due: expectedVAT(u, m), paid: 0, paidDate: null, memo: "" }); added = true; } }
-  if (added) u.payments.sort((a, b) => (a.period || "").localeCompare(b.period || ""));
-}
 function syncLedger(u) {
   if (u.status !== OCC || !u.startDate) return;
   const capYmd = (() => { const end = u.endDate ? ymdOf(u.endDate) : todayYmd(); return end < todayYmd() ? end : todayYmd(); })();
