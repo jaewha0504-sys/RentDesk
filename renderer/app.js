@@ -45,18 +45,39 @@ function todayYmd() { const d = new Date(); return `${d.getFullYear()}-${String(
 function nowMonthKey() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; }
 function monthKeyOf(ymd) { return ymd ? ymd.slice(0, 7) : ""; }
 function startOfMonthYmd(ymd) { return ymd.slice(0, 7) + "-01"; }
-// 입금월 선택 후보 — 과거 3년 ~ 미래 2년. 현재 값이 범위 밖이면 그 값도 포함.
-function periodChoices(current) {
-  const d = new Date(), out = [];
-  for (let i = -36; i <= 24; i++) {
-    const t = new Date(d.getFullYear(), d.getMonth() + i, 1);
-    out.push(`${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}`);
+// 입금월 선택 후보 — **그 호실의 계약기간**(앞뒤 6개월 여유)을 기준으로 만든다.
+// 계약 시작일이 없으면 오늘 기준(과거 3년~미래 2년), 종료일이 없으면 오늘로부터 1년 뒤까지.
+// 이미 저장된 입금월과 현재 값은 범위 밖이어도 항상 포함(선택이 풀리지 않게).
+function periodChoices(u, current) {
+  const set = new Set();
+  const addRange = (sy, sm, ey, em) => {
+    let y = sy, m = sm, guard = 0;
+    while ((y < ey || (y === ey && m <= em)) && guard++ < 600) {
+      set.add(`${y}-${String(m).padStart(2, "0")}`);
+      m++; if (m === 13) { y++; m = 1; }
+    }
+  };
+  const now = new Date();
+  const sYmd = u && u.startDate ? ymdOf(u.startDate) : "";
+  if (sYmd) {
+    const [sy, sm] = sYmd.split("-").map(Number);
+    let ey, em;
+    const eYmd = u.endDate ? ymdOf(u.endDate) : "";
+    if (eYmd) { [ey, em] = eYmd.split("-").map(Number); }
+    else { const t = new Date(now.getFullYear(), now.getMonth() + 12, 1); ey = t.getFullYear(); em = t.getMonth() + 1; }
+    const a = new Date(sy, sm - 1 - 6, 1), b = new Date(ey, em - 1 + 6, 1);
+    addRange(a.getFullYear(), a.getMonth() + 1, b.getFullYear(), b.getMonth() + 1);
+  } else {
+    const a = new Date(now.getFullYear(), now.getMonth() - 36, 1);
+    const b = new Date(now.getFullYear(), now.getMonth() + 24, 1);
+    addRange(a.getFullYear(), a.getMonth() + 1, b.getFullYear(), b.getMonth() + 1);
   }
-  if (current && !out.includes(current)) out.push(current);
-  return out.sort();
+  for (const p of (u && u.payments) || []) if (p.period) set.add(p.period);
+  if (current) set.add(current);
+  return [...set].sort();
 }
-function periodOptions(current) {
-  return periodChoices(current).map((m) => `<option value="${m}"${m === current ? " selected" : ""}>${m}</option>`).join("");
+function periodOptions(u, current) {
+  return periodChoices(u, current).map((m) => `<option value="${m}"${m === current ? " selected" : ""}>${m}</option>`).join("");
 }
 function nextMonth(period) {
   const [y, m] = period.split("-").map(Number);
@@ -149,6 +170,7 @@ async function load() {
   data.buildings ||= []; data.moveOuts ||= []; data.taxIssued ||= [];
   if (migrateCommonFee(data)) save();   // 구조 바뀌었으면 즉시 저장
   if (data.buildings.length === 0) seed();
+  if (syncAllLedgers()) save();        // 새 달이 되었으면 입금내역 행 생성
   selBuildingId = data.buildings[0]?.id || null;
   selUnitId = building()?.units[0]?.id || null;
 }
@@ -324,7 +346,7 @@ function ledgerHTML(u) {
       </tr>`;
     }
     return `<tr data-id="${p.id}" class="${cls}">
-      <td class="periodcell"><span class="draghandle" title="드래그해서 행 순서 이동">☰</span><select class="d-period">${periodOptions(p.period)}</select></td>
+      <td class="periodcell"><span class="draghandle" title="드래그해서 행 순서 이동">☰</span><select class="d-period">${periodOptions(u, p.period)}</select></td>
       <td><input class="num d-due" inputmode="numeric" value="${p.due ? won(p.due) : ""}"></td>
       <td><input class="num d-paid" inputmode="numeric" value="${p.paid ? won(p.paid) : ""}"></td>
       <td><input type="date" class="d-date" value="${ymdOf(p.paidDate)}"></td>
@@ -484,6 +506,26 @@ function syncLedger(u) {
   for (const m of months) if (!existing.has(m) && (!latest || m > latest)) u.payments.push({ id: uid(), period: m, due: expectedVAT(u, m), paid: 0, paidDate: null, memo: "" });
   u.payments.sort((a, b) => (a.period || "").localeCompare(b.period || ""));
 }
+
+// 전체 호실의 입금내역을 계약기간에 맞춰 정리 — 앱 시작 시와 달이 바뀔 때 호출.
+// (예전에는 호실 정보를 저장할 때만 돌아서, 새 달이 되어도 행이 생기지 않았다)
+function syncAllLedgers() {
+  // 행 개수만 비교하면 '예정액만 바뀐 경우'나 '한 행이 지워지고 한 행이 추가된 경우'를
+  // 놓치므로 내용 전체를 비교한다
+  const snap = () => JSON.stringify(data.buildings.map((b) => b.units.map((u) => u.payments || [])));
+  const before = snap();
+  for (const b of data.buildings) for (const u of b.units) syncLedger(u);
+  return before !== snap();
+}
+
+// 앱을 켜둔 채 달이 바뀌는 경우 대비 — 1분마다 확인해 새 달이 되면 행을 만든다
+let watchedMonth = nowMonthKey();
+setInterval(() => {
+  const m = nowMonthKey();
+  if (m === watchedMonth) return;
+  watchedMonth = m;
+  if (syncAllLedgers()) { save(); renderAll(); }
+}, 60000);
 
 // ===== 세금계산서 알림 =====
 const taxKey = (uid_, period) => uid_ + "|" + period;
