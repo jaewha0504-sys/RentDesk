@@ -146,17 +146,18 @@ function migrateCommonFee(d) {
 }
 const expectedFor = (u, p) => (u.rent || 0) + maintFor(u, p);
 const expectedVAT = (u, p) => withVAT(expectedFor(u, p));
-// 미납 합계 — 이번 달은 세금계산서 발행일 전까지 미납으로 치지 않고, 미래 달도 제외
-const unpaidTotal = (u) => {
-  const cur = nowMonthKey(), today = new Date().getDate();
-  return (u.payments || []).reduce((s, p) => {
-    if (!p.isOpening) {
-      if (p.period > cur) return s;                                        // 미래 달
-      if (p.period === cur && (u.taxDay || 0) > 0 && today < u.taxDay) return s; // 발행일 전
-    }
-    return s + (p.due || 0) - (p.paid || 0);
-  }, 0);
-};
+// 이 행의 입금예정액이 '지금' 청구된 상태인지 — 미래 달, 또는 이번 달인데 세금계산서 발행일 전이면 아직 아님
+function isBilled(u, p) {
+  if (p.isOpening) return true;
+  const cur = nowMonthKey();
+  if (p.period > cur) return false;
+  if (p.period === cur && (u.taxDay || 0) > 0 && new Date().getDate() <= u.taxDay) return false; // 발행일 당일까지는 청구 전, 다음 날부터 미납
+  return true;
+}
+// 지금 기준 당월미납 — 청구 전인 달은 예정액을 빼되, 이미 받은 돈은 항상 반영
+// (9월에 받은 8월분처럼 입금월이 이번 달로 적힌 입금이 통째로 빠지지 않게)
+const curUnpaid = (u, p) => (isBilled(u, p) ? (p.due || 0) : 0) - (p.paid || 0);
+const unpaidTotal = (u) => (u.payments || []).reduce((s, p) => s + curUnpaid(u, p), 0);
 
 const building = () => data.buildings.find((b) => b.id === selBuildingId) || null;
 const unit = () => { const b = building(); return b ? (b.units.find((x) => x.id === selUnitId) || null) : null; };
@@ -326,6 +327,11 @@ function renderDetail() {
   };
 }
 
+// 청구 전(발행일 전·미래 달)이고 아직 받은 돈도 없으면 '발행 전'으로 표시
+function billedParts(u, p, v) {
+  if (!isBilled(u, p) && !(p.paid || 0)) return { txt: "발행 전", cls: "muted" };
+  return unpaidParts(v);
+}
 function unpaidParts(v) {
   return { txt: v > 0 ? "-" + won(v) : (v < 0 ? "+" + won(-v) : "—"), cls: v > 0 ? "red" : (v < 0 ? "green" : "") };
 }
@@ -333,8 +339,8 @@ function unpaidParts(v) {
 function ledgerHTML(u) {
   let cum = 0;
   const rows = (u.payments || []).map((p) => {
-    const tu = (p.due || 0) - (p.paid || 0); cum += tu;
-    const tp = unpaidParts(tu), cp = unpaidParts(cum);
+    const tu = curUnpaid(u, p); cum += tu;
+    const tp = billedParts(u, p, tu), cp = unpaidParts(cum);
     const cls = (selPayments.has(p.id) ? "sel " : "") + (p.isOpening ? "opening" : "");
     if (p.isOpening) {
       return `<tr data-id="${p.id}" class="${cls}">
@@ -368,8 +374,8 @@ function refreshComputed(u) {
   let cum = 0;
   document.querySelectorAll("#detailBody tbody tr[data-id]").forEach((tr) => {
     const p = u.payments.find((x) => x.id === tr.dataset.id); if (!p) return;
-    const tu = (p.due || 0) - (p.paid || 0); cum += tu;
-    const tp = unpaidParts(tu), cp = unpaidParts(cum);
+    const tu = curUnpaid(u, p); cum += tu;
+    const tp = billedParts(u, p, tu), cp = unpaidParts(cum);
     const c1 = tr.querySelector(".c-this"), c2 = tr.querySelector(".c-cum");
     if (c1) { c1.textContent = tp.txt; c1.className = "num c-this " + tp.cls; }
     if (c2) { c2.textContent = cp.txt; c2.className = "num c-cum " + cp.cls; }
