@@ -27,6 +27,8 @@
     "files": [
       "main.js",
       "preload.js",
+      "sync.js",
+      "syncmodel.js",
       "renderer/**/*",
       "icon/**/*"
     ],

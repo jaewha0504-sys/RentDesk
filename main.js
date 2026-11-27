@@ -234,6 +234,7 @@ ipcMain.handle("save", (_e, text) => {
 
 // ---- 여러 컴퓨터 동기화 ----
 let sync = null;
+let syncInitError = null;
 function mainWindow() { return BrowserWindow.getAllWindows()[0] || null; }
 function toRenderer(channel, payload) {
   const win = mainWindow();
@@ -241,16 +242,15 @@ function toRenderer(channel, payload) {
 }
 
 function initSync() {
-  const { Sync } = require("./sync");
-  sync = new Sync({
-    dataDir: dataDir(),
-    // 다른 컴퓨터에서 바뀐 자료가 내려왔을 때 — 파일에 쓰고 화면에 알린다
-    onRemote: (data) => {
-      try { fs.writeFileSync(dataFile(), JSON.stringify(data, null, 2), "utf8"); } catch {}
-      toRenderer("sync:data", data);
-    },
-    onStatus: (s) => toRenderer("sync:status", s),
-  });
+  try {
+    const { Sync } = require("./sync");
+    sync = makeSync(Sync);
+  } catch (e) {
+    // 설치판에 sync.js 가 빠졌거나 firebase 를 못 읽은 경우 — 앱은 그대로 쓰고, 이유를 남긴다
+    syncInitError = "동기화 기능을 불러오지 못했습니다: " + (e && e.message ? e.message : String(e));
+    updLog("동기화 초기화 실패", String(e));
+    return;
+  }
   // 저장된 연결이 있으면 자동으로 이어진다 — 코드를 다시 넣을 필요가 없다
   if (sync.status().enabled) {
     let local = null;
@@ -259,11 +259,29 @@ function initSync() {
   }
 }
 
-ipcMain.handle("syncStatus", () => (sync ? sync.status() : { enabled: false }));
-ipcMain.handle("syncCreate", async (_e, text) => sync.createSpace(JSON.parse(text)));
-ipcMain.handle("syncJoin", async (_e, { code, mode, text }) => sync.joinSpace(code, mode, JSON.parse(text)));
-ipcMain.handle("syncUnpair", () => { sync.unpair(); return sync.status(); });
-ipcMain.handle("syncSetMode", (_e, mode) => sync.setMode(mode));
+function makeSync(Sync) {
+  return new Sync({
+    dataDir: dataDir(),
+    // 다른 컴퓨터에서 바뀐 자료가 내려왔을 때 — 파일에 쓰고 화면에 알린다
+    onRemote: (data) => {
+      try { fs.writeFileSync(dataFile(), JSON.stringify(data, null, 2), "utf8"); } catch {}
+      toRenderer("sync:data", data);
+    },
+    onStatus: (s) => toRenderer("sync:status", s),
+  });
+}
+
+/// 동기화를 못 쓰는 상태면 까닭을 담아 던진다 — 화면에서 그대로 보여준다
+function needSync() {
+  if (!sync) throw new Error(syncInitError || "동기화 기능을 쓸 수 없습니다. 앱을 다시 켜보세요.");
+  return sync;
+}
+
+ipcMain.handle("syncStatus", () => (sync ? sync.status() : { enabled: false, error: syncInitError }));
+ipcMain.handle("syncCreate", async (_e, text) => needSync().createSpace(JSON.parse(text)));
+ipcMain.handle("syncJoin", async (_e, { code, mode, text }) => needSync().joinSpace(code, mode, JSON.parse(text)));
+ipcMain.handle("syncUnpair", () => { needSync().unpair(); return sync.status(); });
+ipcMain.handle("syncSetMode", (_e, mode) => needSync().setMode(mode));
 
 // ---- 첨부 ----
 ipcMain.handle("attach", async (_e, { unitId, kind }) => {

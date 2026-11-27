@@ -953,6 +953,12 @@ function applyRemoteData(incoming) {
   renderAll();
 }
 
+/// 메인 프로세스에서 올라온 오류 글귀를 읽기 좋게 — 앞에 붙는 긴 머리말을 떼낸다
+function cleanErr(e) {
+  const m = String((e && e.message) || e || "");
+  return m.replace(/^Error invoking remote method '[^']*':\s*/, "").replace(/^Error:\s*/, "") || "까닭을 알 수 없습니다.";
+}
+
 function openSync() {
   const s = syncState;
   const connected = s.enabled;
@@ -987,8 +993,15 @@ function openSync() {
     };
     return;
   }
-  ov.querySelector("#create").onclick = async () => {
-    syncState = await window.api.syncCreate(JSON.stringify(data));
+  ov.querySelector("#create").onclick = async (ev) => {
+    const btn = ev.target;
+    btn.disabled = true; btn.textContent = "만드는 중…";
+    try {
+      syncState = await window.api.syncCreate(JSON.stringify(data));
+    } catch (e) {
+      btn.disabled = false; btn.textContent = "연결 만들기";
+      return alert("연결을 만들지 못했습니다.\n\n" + cleanErr(e));
+    }
     renderSyncBadge(); ov.remove();
     alert("연결을 만들었습니다.\n\n연결 코드: " + syncState.code + "\n\n다른 컴퓨터의 RentDesk에서 「다른 컴퓨터와 연결」을 열고 이 코드를 넣으세요.");
   };
@@ -1000,7 +1013,7 @@ function openSync() {
     try {
       syncState = await window.api.syncJoin(code, ro ? "view" : "edit", JSON.stringify(data));
       renderSyncBadge(); ov.remove();
-    } catch (e) { alert("연결하지 못했습니다: " + (e.message || e)); }
+    } catch (e) { alert("연결하지 못했습니다.\n\n" + cleanErr(e)); }
   };
 }
 
