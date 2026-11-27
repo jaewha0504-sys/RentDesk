@@ -12,4 +12,13 @@ contextBridge.exposeInMainWorld("api", {
   exportExcel: (bytes, name) => ipcRenderer.invoke("exportExcel", { bytes, name }),
   exportBackup: (text, name, attachPaths) => ipcRenderer.invoke("exportBackup", { text, name, attachPaths }),
   importBackup: () => ipcRenderer.invoke("importBackup"),
+
+  // 여러 컴퓨터 동기화
+  syncStatus: () => ipcRenderer.invoke("syncStatus"),
+  syncCreate: (text) => ipcRenderer.invoke("syncCreate", text),
+  syncJoin: (code, mode, text) => ipcRenderer.invoke("syncJoin", { code, mode, text }),
+  syncUnpair: () => ipcRenderer.invoke("syncUnpair"),
+  syncSetMode: (mode) => ipcRenderer.invoke("syncSetMode", mode),
+  onSyncData: (fn) => ipcRenderer.on("sync:data", (_e, data) => fn(data)),
+  onSyncStatus: (fn) => ipcRenderer.on("sync:status", (_e, s) => fn(s)),
 });

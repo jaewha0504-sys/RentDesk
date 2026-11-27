@@ -12,7 +12,8 @@
     "dist:win": "electron-builder --win --publish never"
   },
   "dependencies": {
-    "electron-updater": "^6.3.9"
+    "electron-updater": "^6.3.9",
+    "firebase": "^13.4.0"
   },
   "build": {
     "appId": "com.rentdesk.app",

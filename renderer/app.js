@@ -5,6 +5,7 @@ let data = { buildings: [], moveOuts: [], taxIssued: [] };
 let selBuildingId = null, selUnitId = null;
 let selPayments = new Set(), anchorPayment = null;
 let saveTimer = null;
+let syncState = { enabled: false };   // 동기화 상태 (아래 "여러 컴퓨터 동기화" 참고)
 
 const OCC = "임대중", VAC = "공실", MRG = "통합됨", SAME = "짝/홀수달 동일", DIFF = "짝/홀수달 상이";
 
@@ -164,7 +165,11 @@ const unit = () => { const b = building(); return b ? (b.units.find((x) => x.id 
 function findUnit(id) { for (const b of data.buildings) { const u = b.units.find((x) => x.id === id); if (u) return u; } return null; }
 
 // ===== 저장/로드 =====
-function save() { clearTimeout(saveTimer); saveTimer = setTimeout(() => window.api.save(JSON.stringify(data, null, 2)), 300); }
+function save() {
+  if (syncState.readOnly) return;      // 열람 전용으로 연결된 컴퓨터에서는 바꾸지 않는다
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => window.api.save(JSON.stringify(data, null, 2)), 300);
+}
 async function load() {
   const raw = await window.api.load();
   if (raw) { try { data = JSON.parse(raw); } catch { data = { buildings: [], moveOuts: [], taxIssued: [] }; } }
@@ -923,4 +928,88 @@ function setupResizers() {
 }
 setupResizers();
 
-load().then(renderAll);
+// ===== 여러 컴퓨터 동기화 =====
+/// 상단 표시 — 연결 상태를 한눈에
+function renderSyncBadge() {
+  const el = document.getElementById("syncBadge");
+  if (!syncState.enabled) { el.hidden = true; document.body.classList.remove("readonly"); return; }
+  el.hidden = false;
+  const ro = syncState.readOnly;
+  document.body.classList.toggle("readonly", ro);
+  if (syncState.error) { el.className = "syncbadge warn"; el.textContent = "⚠ 동기화 문제"; el.title = syncState.error; return; }
+  el.className = "syncbadge" + (syncState.connected ? " ok" : "");
+  el.textContent = (syncState.connected ? "연결됨" : "연결 중…") + (ro ? " · 열람 전용" : "");
+  el.title = ro ? "이 컴퓨터에서는 수정할 수 없습니다." : "다른 컴퓨터와 자료를 함께 보고 있습니다.";
+}
+
+/// 다른 컴퓨터에서 바뀐 자료가 내려왔을 때 — 보고 있던 위치는 그대로 두고 화면만 새로 그린다
+function applyRemoteData(incoming) {
+  data = incoming;
+  data.buildings ||= []; data.moveOuts ||= []; data.taxIssued ||= [];
+  if (!data.buildings.some((b) => b.id === selBuildingId)) selBuildingId = data.buildings[0]?.id || null;
+  const b = building();
+  if (!b || !b.units.some((u) => u.id === selUnitId)) selUnitId = b?.units[0]?.id || null;
+  selPayments.clear();
+  renderAll();
+}
+
+function openSync() {
+  const s = syncState;
+  const connected = s.enabled;
+  const body = connected
+    ? `<div class="field"><label>연결 코드</label>
+         <input id="s-code" value="${esc(s.code || "")}" readonly style="font-family:ui-monospace,monospace">
+         <div class="muted">다른 컴퓨터의 RentDesk에서 이 코드를 넣으면 같은 자료를 봅니다. 한 번만 넣으면 다음부터는 저절로 이어집니다.</div></div>
+       <div class="field"><label>이 컴퓨터</label>
+         <label class="cb"><input type="checkbox" id="s-ro" ${s.readOnly ? "checked" : ""}> 열람 전용 (보기·엑셀만, 수정·삭제 막기)</label></div>
+       <div class="muted">${s.error ? "⚠ " + esc(s.error) : s.connected ? "자료가 맞춰져 있습니다." : "연결 중입니다…"}</div>`
+    : `<div class="muted">여러 컴퓨터에서 같은 자료를 보고 쓸 수 있습니다. 한쪽에서 입력하면 다른 컴퓨터에 바로 반영됩니다.<br><br>
+         <b>이 컴퓨터의 자료를 기준으로 시작</b>하려면 「연결 만들기」를, 다른 컴퓨터에서 이미 만든 코드가 있으면 그 코드를 넣으세요.</div>
+       <div class="field"><label>연결 코드 넣기</label>
+         <input id="s-join" placeholder="예: ABCD-EFGH-JKLM-NPQR-STUV" style="font-family:ui-monospace,monospace">
+         <label class="cb"><input type="checkbox" id="s-ro" checked> 이 컴퓨터는 열람 전용 (권장 — 실수로 고치는 일을 막습니다)</label></div>`;
+  const foot = connected
+    ? `<button id="unpair" class="danger">연결 끊기</button><span style="flex:1"></span><button id="c">닫기</button>`
+    : `<button id="create" class="accent">연결 만들기</button><button id="join">코드로 참여</button><span style="flex:1"></span><button id="c">닫기</button>`;
+  const ov = modal("다른 컴퓨터와 연결", body, foot);
+  ov.querySelector("#c").onclick = () => ov.remove();
+
+  if (connected) {
+    ov.querySelector("#s-code").onclick = (e) => e.target.select();
+    ov.querySelector("#s-ro").onchange = async (e) => {
+      syncState = await window.api.syncSetMode(e.target.checked ? "view" : "edit");
+      renderSyncBadge();
+    };
+    ov.querySelector("#unpair").onclick = async () => {
+      if (!confirm("이 컴퓨터의 연결을 끊을까요?\n이 컴퓨터에 있는 자료는 그대로 남고, 더 이상 서로 반영되지 않습니다.")) return;
+      syncState = await window.api.syncUnpair();
+      renderSyncBadge(); ov.remove();
+    };
+    return;
+  }
+  ov.querySelector("#create").onclick = async () => {
+    syncState = await window.api.syncCreate(JSON.stringify(data));
+    renderSyncBadge(); ov.remove();
+    alert("연결을 만들었습니다.\n\n연결 코드: " + syncState.code + "\n\n다른 컴퓨터의 RentDesk에서 「다른 컴퓨터와 연결」을 열고 이 코드를 넣으세요.");
+  };
+  ov.querySelector("#join").onclick = async () => {
+    const code = ov.querySelector("#s-join").value.trim();
+    if (!code) return alert("연결 코드를 넣으세요.");
+    const ro = ov.querySelector("#s-ro").checked;
+    if (!confirm("이 컴퓨터의 자료는 연결된 쪽의 자료로 바뀝니다.\n계속할까요?")) return;
+    try {
+      syncState = await window.api.syncJoin(code, ro ? "view" : "edit", JSON.stringify(data));
+      renderSyncBadge(); ov.remove();
+    } catch (e) { alert("연결하지 못했습니다: " + (e.message || e)); }
+  };
+}
+
+document.getElementById("btnSync").onclick = openSync;
+window.api.onSyncData(applyRemoteData);
+window.api.onSyncStatus((s) => { syncState = s; renderSyncBadge(); });
+
+load().then(async () => {
+  renderAll();
+  syncState = await window.api.syncStatus();
+  renderSyncBadge();
+});

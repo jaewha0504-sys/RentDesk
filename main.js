@@ -214,6 +214,7 @@ ipcMain.handle("appVersion", () => app.getVersion());
 app.whenReady().then(() => {
   createWindow();
   setupAutoUpdate();
+  initSync();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
@@ -227,8 +228,42 @@ ipcMain.handle("load", () => {
 });
 ipcMain.handle("save", (_e, text) => {
   fs.writeFileSync(dataFile(), text, "utf8");
+  if (sync) { try { sync.push(JSON.parse(text)); } catch {} }   // 바뀐 레코드만 올린다
   return true;
 });
+
+// ---- 여러 컴퓨터 동기화 ----
+let sync = null;
+function mainWindow() { return BrowserWindow.getAllWindows()[0] || null; }
+function toRenderer(channel, payload) {
+  const win = mainWindow();
+  if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
+}
+
+function initSync() {
+  const { Sync } = require("./sync");
+  sync = new Sync({
+    dataDir: dataDir(),
+    // 다른 컴퓨터에서 바뀐 자료가 내려왔을 때 — 파일에 쓰고 화면에 알린다
+    onRemote: (data) => {
+      try { fs.writeFileSync(dataFile(), JSON.stringify(data, null, 2), "utf8"); } catch {}
+      toRenderer("sync:data", data);
+    },
+    onStatus: (s) => toRenderer("sync:status", s),
+  });
+  // 저장된 연결이 있으면 자동으로 이어진다 — 코드를 다시 넣을 필요가 없다
+  if (sync.status().enabled) {
+    let local = null;
+    try { local = JSON.parse(fs.readFileSync(dataFile(), "utf8")); } catch {}
+    sync.start(local).catch(() => {});
+  }
+}
+
+ipcMain.handle("syncStatus", () => (sync ? sync.status() : { enabled: false }));
+ipcMain.handle("syncCreate", async (_e, text) => sync.createSpace(JSON.parse(text)));
+ipcMain.handle("syncJoin", async (_e, { code, mode, text }) => sync.joinSpace(code, mode, JSON.parse(text)));
+ipcMain.handle("syncUnpair", () => { sync.unpair(); return sync.status(); });
+ipcMain.handle("syncSetMode", (_e, mode) => sync.setMode(mode));
 
 // ---- 첨부 ----
 ipcMain.handle("attach", async (_e, { unitId, kind }) => {

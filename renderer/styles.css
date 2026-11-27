@@ -118,3 +118,20 @@ body.dragging-row, body.dragging-row *{cursor:grabbing!important;user-select:non
 .periodcell .draghandle{cursor:grab;color:var(--muted);font-size:11px;padding:0 3px;user-select:none;}
 .periodcell .draghandle:active{cursor:grabbing;}
 .periodcell .d-period{border:1px solid var(--border);border-radius:6px;background:#fff;color:var(--text);font-size:13px;padding:3px 4px;}
+
+/* 동기화 상태 표시 */
+.syncbadge{font-size:12px;padding:3px 9px;border-radius:999px;border:1px solid var(--border);color:var(--muted);white-space:nowrap;}
+.syncbadge.ok{border-color:#9bd0a8;background:#eef9f1;color:#1d7a3a;}
+.syncbadge.warn{border-color:#e7b4b4;background:#fdf0f0;color:#a32a2a;}
+
+/* 열람 전용 — 수정·삭제 수단을 감추고 입력칸을 잠근다 */
+body.readonly #btnAddBuilding,
+body.readonly #btnAddUnit,
+body.readonly #btnMoveOut,
+body.readonly #btnDelUnit,
+body.readonly #btnAddPay,
+body.readonly #btnDelPay{display:none;}
+body.readonly .ledger input,
+body.readonly .ledger select{pointer-events:none;background:#f6f6f7;color:var(--muted);}
+body.readonly .ledger .draghandle{display:none;}
+body.readonly #taxReminder input[type="checkbox"]{pointer-events:none;opacity:.5;}
